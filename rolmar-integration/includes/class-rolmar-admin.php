@@ -27,6 +27,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_sync_stock', array( $this, 'ajax_sync_stock' ) );
         add_action( 'wp_ajax_rolmar_sync_photos', array( $this, 'ajax_sync_photos' ) );
         add_action( 'wp_ajax_rolmar_get_sync_status', array( $this, 'ajax_get_sync_status' ) );
+        add_action( 'wp_ajax_rolmar_load_category_tree', array( $this, 'ajax_load_category_tree' ) );
     }
 
     public function add_menu() {
@@ -149,6 +150,28 @@ class Rolmar_Admin {
                 'en' => 'English',
             ),
         ) );
+
+        // Category Filter section.
+        add_settings_section(
+            'rolmar_category_section',
+            __( 'Filtr kategorii', 'rolmar-integration' ),
+            function () {
+                echo '<p>' . esc_html__( 'Wybierz kategorie produktów do importu. Jeśli żadna kategoria nie jest zaznaczona, importowane będą wszystkie produkty.', 'rolmar-integration' ) . '</p>';
+            },
+            'rolmar-integration'
+        );
+
+        register_setting( 'rolmar_settings', 'rolmar_allowed_categories', array(
+            'sanitize_callback' => array( $this, 'sanitize_allowed_categories' ),
+        ) );
+
+        add_settings_field(
+            'rolmar_allowed_categories',
+            __( 'Dozwolone kategorie', 'rolmar-integration' ),
+            array( $this, 'render_category_tree_field' ),
+            'rolmar-integration',
+            'rolmar_category_section'
+        );
     }
 
     private function add_field( $id, $title, $type, $section, $extra = array() ) {
@@ -246,6 +269,45 @@ class Rolmar_Admin {
         if ( ! empty( $args['description'] ) ) {
             printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );
         }
+    }
+
+    public function sanitize_allowed_categories( $value ) {
+        if ( empty( $value ) ) {
+            return array();
+        }
+        if ( is_string( $value ) ) {
+            $value = json_decode( stripslashes( $value ), true );
+        }
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+        return array_map( 'sanitize_text_field', array_values( array_unique( $value ) ) );
+    }
+
+    public function render_category_tree_field() {
+        $allowed    = get_option( 'rolmar_allowed_categories', array() );
+        $cached_html = get_option( 'rolmar_category_tree_html', '' );
+        ?>
+        <div id="rolmar-category-tree-wrap">
+            <p>
+                <button type="button" id="rolmar-refresh-tree" class="button button-secondary">
+                    <?php esc_html_e( 'Odśwież strukturę kategorii z API', 'rolmar-integration' ); ?>
+                </button>
+                <span class="spinner" id="rolmar-tree-spinner" style="float:none;"></span>
+                <span id="rolmar-tree-status" class="rolmar-status-message"></span>
+            </p>
+            <div id="rolmar-category-tree" class="rolmar-category-tree">
+                <?php
+                if ( ! empty( $cached_html ) ) {
+                    echo $cached_html; // Already escaped during generation.
+                } else {
+                    echo '<p class="description">' . esc_html__( 'Kliknij "Odśwież strukturę kategorii z API", aby pobrać drzewo kategorii.', 'rolmar-integration' ) . '</p>';
+                }
+                ?>
+            </div>
+            <input type="hidden" id="rolmar_allowed_categories" name="rolmar_allowed_categories" value="<?php echo esc_attr( wp_json_encode( $allowed ) ); ?>" />
+        </div>
+        <?php
     }
 
     // -- Page renderers --
@@ -405,6 +467,9 @@ class Rolmar_Admin {
                 'syncDone'       => __( 'Synchronizacja zakończona!', 'rolmar-integration' ),
                 'syncError'      => __( 'Błąd synchronizacji', 'rolmar-integration' ),
                 'confirmSync'    => __( 'Czy na pewno chcesz rozpocząć import produktów? Może to potrwać dłuższy czas.', 'rolmar-integration' ),
+                'loadingTree'    => __( 'Pobieranie struktury kategorii z API...', 'rolmar-integration' ),
+                'treeLoaded'     => __( 'Struktura kategorii została załadowana.', 'rolmar-integration' ),
+                'treeError'      => __( 'Błąd pobierania kategorii', 'rolmar-integration' ),
             ),
         ) );
     }
@@ -512,5 +577,104 @@ class Rolmar_Admin {
             'in_progress' => ! empty( $in_progress ),
             'progress'    => $progress,
         ) );
+    }
+
+    public function ajax_load_category_tree() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( __( 'Brak uprawnień.', 'rolmar-integration' ) );
+        }
+
+        // Increase limits for large product catalog.
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
+
+        $client   = new Rolmar_API_Client();
+        $products = $client->get_products();
+
+        if ( is_wp_error( $products ) ) {
+            wp_send_json_error( $products->get_error_message() );
+        }
+
+        if ( ! is_array( $products ) ) {
+            wp_send_json_error( __( 'Nieprawidłowa odpowiedź z API.', 'rolmar-integration' ) );
+        }
+
+        // Extract unique category paths and build tree structure.
+        $tree = array();
+        foreach ( $products as $product ) {
+            if ( empty( $product['categories'] ) || ! is_array( $product['categories'] ) ) {
+                continue;
+            }
+            foreach ( $product['categories'] as $path ) {
+                $parts = array_map( 'trim', explode( '>', $path ) );
+                $parts = array_filter( $parts );
+                $ref   = &$tree;
+                foreach ( $parts as $part ) {
+                    if ( ! isset( $ref[ $part ] ) ) {
+                        $ref[ $part ] = array();
+                    }
+                    $ref = &$ref[ $part ];
+                }
+                unset( $ref );
+            }
+        }
+
+        // Sort tree alphabetically at each level.
+        $this->sort_tree_recursive( $tree );
+
+        // Generate HTML.
+        $html = $this->render_category_tree_html( $tree );
+
+        // Cache the HTML.
+        update_option( 'rolmar_category_tree_html', $html, false );
+
+        wp_send_json_success( array(
+            'html' => $html,
+        ) );
+    }
+
+    private function sort_tree_recursive( &$tree ) {
+        ksort( $tree, SORT_LOCALE_STRING );
+        foreach ( $tree as &$children ) {
+            if ( ! empty( $children ) ) {
+                $this->sort_tree_recursive( $children );
+            }
+        }
+    }
+
+    private function render_category_tree_html( $tree, $parent_path = '' ) {
+        if ( empty( $tree ) ) {
+            return '';
+        }
+
+        $html = '<ul class="rolmar-tree-list">';
+        foreach ( $tree as $name => $children ) {
+            $current_path = $parent_path ? $parent_path . '>' . $name : $name;
+            $escaped_path = esc_attr( $current_path );
+            $escaped_name = esc_html( $name );
+            $has_children = ! empty( $children );
+
+            $html .= '<li class="rolmar-tree-node">';
+            if ( $has_children ) {
+                $html .= '<span class="rolmar-tree-toggle dashicons dashicons-arrow-right-alt2"></span>';
+            } else {
+                $html .= '<span class="rolmar-tree-toggle-spacer"></span>';
+            }
+            $html .= '<label>';
+            $html .= '<input type="checkbox" class="rolmar-cat-checkbox" data-path="' . $escaped_path . '" /> ';
+            $html .= $escaped_name;
+            $html .= '</label>';
+
+            if ( $has_children ) {
+                $html .= $this->render_category_tree_html( $children, $current_path );
+            }
+
+            $html .= '</li>';
+        }
+        $html .= '</ul>';
+
+        return $html;
     }
 }

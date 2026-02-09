@@ -73,6 +73,74 @@
     border-radius: 3px;
 }
 
+/* Category tree */
+.rolmar-category-tree {
+    max-height: 500px;
+    overflow-y: auto;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 10px;
+    background: #fff;
+    margin-top: 10px;
+}
+
+.rolmar-tree-list {
+    list-style: none;
+    margin: 0;
+    padding-left: 20px;
+}
+
+.rolmar-category-tree > .rolmar-tree-list {
+    padding-left: 0;
+}
+
+.rolmar-tree-node {
+    margin: 2px 0;
+}
+
+.rolmar-tree-node > .rolmar-tree-list {
+    display: none;
+}
+
+.rolmar-tree-node.rolmar-tree-open > .rolmar-tree-list {
+    display: block;
+}
+
+.rolmar-tree-toggle {
+    cursor: pointer;
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    vertical-align: middle;
+    color: #555;
+    transition: transform 0.15s ease;
+    font-size: 16px;
+}
+
+.rolmar-tree-node.rolmar-tree-open > .rolmar-tree-toggle {
+    transform: rotate(90deg);
+}
+
+.rolmar-tree-toggle-spacer {
+    display: inline-block;
+    width: 20px;
+}
+
+.rolmar-tree-node label {
+    cursor: pointer;
+    vertical-align: middle;
+    font-size: 13px;
+}
+
+.rolmar-cat-checkbox {
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+#rolmar-tree-spinner {
+    vertical-align: middle;
+}
+
 /* Log viewer */
 .rolmar-log-viewer {
     background: #1d2327;

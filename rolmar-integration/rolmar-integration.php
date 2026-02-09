@@ -81,7 +81,8 @@ final class Rolmar_Integration {
             'batch_size'        => 50,
             'import_images'     => 'yes',
             'manage_stock'      => 'yes',
-            'default_language'  => 'pl',
+            'default_language'      => 'pl',
+            'allowed_categories'    => array(),
         );
 
         foreach ( $defaults as $key => $value ) {

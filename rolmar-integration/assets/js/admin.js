@@ -163,10 +163,132 @@
         }, 3000);
     }
 
+    // --- Category Tree ---
+
+    // Refresh category tree from API.
+    $('#rolmar-refresh-tree').on('click', function () {
+        var $btn = $(this);
+        var $spinner = $('#rolmar-tree-spinner');
+        var $status = $('#rolmar-tree-status');
+
+        $btn.prop('disabled', true);
+        $spinner.addClass('is-active');
+        $status.removeClass('success error').text(rolmarAdmin.i18n.loadingTree);
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_load_category_tree',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false);
+            $spinner.removeClass('is-active');
+
+            if (response.success) {
+                $('#rolmar-category-tree').html(response.data.html);
+                $status.addClass('success').text(rolmarAdmin.i18n.treeLoaded);
+                restoreCheckedState();
+            } else {
+                $status.addClass('error').text(response.data || rolmarAdmin.i18n.treeError);
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $spinner.removeClass('is-active');
+            $status.addClass('error').text(rolmarAdmin.i18n.treeError);
+        });
+    });
+
+    // Toggle tree node expand/collapse.
+    $(document).on('click', '.rolmar-tree-toggle', function () {
+        var $li = $(this).closest('.rolmar-tree-node');
+        $li.toggleClass('rolmar-tree-open');
+    });
+
+    // Parent-child checkbox logic + sync hidden field.
+    $(document).on('change', '.rolmar-cat-checkbox', function () {
+        var $this = $(this);
+        var isChecked = $this.is(':checked');
+
+        // Check/uncheck all descendant checkboxes.
+        $this.closest('.rolmar-tree-node').find('.rolmar-cat-checkbox').prop('checked', isChecked);
+
+        // Update parent states (indeterminate / checked).
+        updateParentCheckboxes($this);
+
+        syncCategorySelection();
+    });
+
+    function updateParentCheckboxes($child) {
+        var $parentLi = $child.closest('.rolmar-tree-list').closest('.rolmar-tree-node');
+        if (!$parentLi.length) {
+            return;
+        }
+
+        var $parentCheckbox = $parentLi.children('label').find('.rolmar-cat-checkbox');
+        var $childCheckboxes = $parentLi.children('.rolmar-tree-list').find('.rolmar-cat-checkbox');
+        var totalChildren = $childCheckboxes.length;
+        var checkedChildren = $childCheckboxes.filter(':checked').length;
+
+        if (checkedChildren === 0) {
+            $parentCheckbox.prop('checked', false).prop('indeterminate', false);
+        } else if (checkedChildren === totalChildren) {
+            $parentCheckbox.prop('checked', true).prop('indeterminate', false);
+        } else {
+            $parentCheckbox.prop('checked', false).prop('indeterminate', true);
+        }
+
+        // Recurse up the tree.
+        updateParentCheckboxes($parentCheckbox);
+    }
+
+    function syncCategorySelection() {
+        var selected = [];
+        $('.rolmar-cat-checkbox:checked').each(function () {
+            selected.push($(this).data('path'));
+        });
+        $('#rolmar_allowed_categories').val(JSON.stringify(selected));
+    }
+
+    function restoreCheckedState() {
+        var raw = $('#rolmar_allowed_categories').val();
+        var allowed = [];
+        try {
+            allowed = JSON.parse(raw);
+        } catch (e) {
+            allowed = [];
+        }
+
+        if (!allowed || !allowed.length) {
+            return;
+        }
+
+        // Check saved paths.
+        $('.rolmar-cat-checkbox').each(function () {
+            var path = $(this).data('path');
+            if ($.inArray(path, allowed) !== -1) {
+                $(this).prop('checked', true);
+            }
+        });
+
+        // Update parent indeterminate states bottom-up.
+        // Process deepest nodes first by iterating leaf checkboxes.
+        $('.rolmar-cat-checkbox:checked').each(function () {
+            updateParentCheckboxes($(this));
+        });
+
+        // Auto-expand nodes that have checked children.
+        $('.rolmar-cat-checkbox:checked').each(function () {
+            $(this).parents('.rolmar-tree-node').addClass('rolmar-tree-open');
+        });
+    }
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {
             startPolling();
+        }
+
+        // Restore category tree checkbox state on page load.
+        if ($('#rolmar-category-tree .rolmar-cat-checkbox').length) {
+            restoreCheckedState();
         }
     });
 
