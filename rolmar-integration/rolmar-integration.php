@@ -1,10 +1,10 @@
 <?php
 /**
  * Plugin Name: Rolmar Integration for WooCommerce
- * Plugin URI: https://github.com/Xsusel/API-rolmark
+ * Plugin URI: 
  * Description: Integracja WooCommerce z API hurtowni Rolmar - import produktów, synchronizacja stanów magazynowych i zdjęć.
  * Version: 1.0.0
- * Author: Xsusel
+ * Author: Jakub Wcisło
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * WC requires at least: 5.0

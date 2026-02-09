@@ -139,12 +139,10 @@ class Rolmar_API_Client {
             'lang' => $this->language,
         ) );
 
+// Budowa poprawnej struktury body zgodnie z błędem API
         $body = wp_json_encode( array(
-            'data' => array(
-                array(
-                    'param' => ! empty( $params ) ? array( $params ) : array(),
-                ),
-            ),
+            'wsKey' => $this->api_key,
+            'param' => $params,
         ) );
 
         Rolmar_Logger::info( "API Request: {$method} -> {$url}", 'api' );
@@ -153,7 +151,7 @@ class Rolmar_API_Client {
             'timeout' => self::TIMEOUT,
             'headers' => array(
                 'Content-Type' => 'application/json',
-                'key'          => $this->api_key,
+                'wsKey'        => $this->api_key, // Zmiana z 'key' na 'wsKey'
             ),
             'body' => $body,
         ) );

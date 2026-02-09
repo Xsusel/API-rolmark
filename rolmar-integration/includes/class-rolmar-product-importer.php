@@ -325,31 +325,30 @@ class Rolmar_Product_Importer {
      * @param int   $product_id  WooCommerce product ID.
      * @param array $categories  Array of category path strings like "Hydraulika siłowa>Węże>Podtyp".
      */
-    private function set_product_categories( $product_id, $categories ) {
+        private function set_product_categories( $product_id, $categories ) {
         $term_ids = array();
 
         foreach ( $categories as $category_path ) {
             $parts     = array_map( 'trim', explode( '>', $category_path ) );
             $parent_id = 0;
+            $last_term_id = 0;
 
             foreach ( $parts as $cat_name ) {
-                if ( empty( $cat_name ) ) {
-                    continue;
-                }
+                if ( empty( $cat_name ) ) continue;
 
                 $term = term_exists( $cat_name, 'product_cat', $parent_id );
-
                 if ( ! $term ) {
-                    $term = wp_insert_term( $cat_name, 'product_cat', array(
-                        'parent' => $parent_id,
-                    ) );
+                    $term = wp_insert_term( $cat_name, 'product_cat', array('parent' => $parent_id) );
                 }
 
                 if ( ! is_wp_error( $term ) ) {
-                    $term_id   = is_array( $term ) ? intval( $term['term_id'] ) : intval( $term );
-                    $parent_id = $term_id;
-                    $term_ids[] = $term_id;
+                    $last_term_id = is_array( $term ) ? intval( $term['term_id'] ) : intval( $term );
+                    $parent_id = $last_term_id;
                 }
+            }
+            
+            if ( $last_term_id ) {
+                $term_ids[] = $last_term_id; // Dodajemy tylko ostatni segment ścieżki
             }
         }
 
