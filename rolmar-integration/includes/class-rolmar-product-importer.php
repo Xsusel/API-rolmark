@@ -17,6 +17,7 @@ class Rolmar_Product_Importer {
     private $batch_size;
     private $import_images;
     private $manage_stock;
+    private $allowed_categories;
 
     public function __construct() {
         $this->api              = new Rolmar_API_Client();
@@ -24,6 +25,10 @@ class Rolmar_Product_Importer {
         $this->batch_size       = intval( get_option( 'rolmar_batch_size', 50 ) );
         $this->import_images    = get_option( 'rolmar_import_images', 'yes' ) === 'yes';
         $this->manage_stock     = get_option( 'rolmar_manage_stock', 'yes' ) === 'yes';
+        $this->allowed_categories = get_option( 'rolmar_allowed_categories', array() );
+        if ( ! is_array( $this->allowed_categories ) ) {
+            $this->allowed_categories = array();
+        }
     }
 
     /**
@@ -54,11 +59,45 @@ class Rolmar_Product_Importer {
         $created = 0;
         $updated = 0;
         $errors  = 0;
+        $skipped = 0;
+
+        $has_category_filter = ! empty( $this->allowed_categories );
+        if ( $has_category_filter ) {
+            Rolmar_Logger::info( 'Category filter active with ' . count( $this->allowed_categories ) . ' allowed paths.', 'import' );
+        }
 
         Rolmar_Logger::info( "Fetched {$total} products from API. Starting import...", 'import' );
         $this->update_progress( 'importing', sprintf( __( 'Importowanie 0 / %d produktów...', 'rolmar-integration' ), $total ), $total );
 
         foreach ( $products as $index => $product_data ) {
+            // Category filter check.
+            if ( $has_category_filter && ! $this->is_product_allowed( $product_data ) ) {
+                $skipped++;
+
+                // Update progress every batch_size items even for skipped.
+                if ( ( $index + 1 ) % $this->batch_size === 0 || ( $index + 1 ) === $total ) {
+                    $processed = $index + 1;
+                    $this->update_progress(
+                        'importing',
+                        sprintf(
+                            __( 'Importowanie %1$d / %2$d produktów (nowych: %3$d, zaktualizowanych: %4$d, pominiętych: %5$d, błędów: %6$d)', 'rolmar-integration' ),
+                            $processed,
+                            $total,
+                            $created,
+                            $updated,
+                            $skipped,
+                            $errors
+                        ),
+                        $total,
+                        $processed,
+                        $created,
+                        $updated,
+                        $errors
+                    );
+                }
+                continue;
+            }
+
             try {
                 $result = $this->import_single_product( $product_data );
 
@@ -79,11 +118,12 @@ class Rolmar_Product_Importer {
                 $this->update_progress(
                     'importing',
                     sprintf(
-                        __( 'Importowanie %1$d / %2$d produktów (nowych: %3$d, zaktualizowanych: %4$d, błędów: %5$d)', 'rolmar-integration' ),
+                        __( 'Importowanie %1$d / %2$d produktów (nowych: %3$d, zaktualizowanych: %4$d, pominiętych: %5$d, błędów: %6$d)', 'rolmar-integration' ),
                         $processed,
                         $total,
                         $created,
                         $updated,
+                        $skipped,
                         $errors
                     ),
                     $total,
@@ -104,10 +144,11 @@ class Rolmar_Product_Importer {
         $this->handle_inactive_products();
 
         $message = sprintf(
-            __( 'Import zakończony. Łącznie: %1$d, nowych: %2$d, zaktualizowanych: %3$d, błędów: %4$d', 'rolmar-integration' ),
+            __( 'Import zakończony. Łącznie: %1$d, nowych: %2$d, zaktualizowanych: %3$d, pominiętych: %4$d, błędów: %5$d', 'rolmar-integration' ),
             $total,
             $created,
             $updated,
+            $skipped,
             $errors
         );
         Rolmar_Logger::info( $message, 'import' );
@@ -355,6 +396,38 @@ class Rolmar_Product_Importer {
         if ( ! empty( $term_ids ) ) {
             wp_set_object_terms( $product_id, array_unique( $term_ids ), 'product_cat' );
         }
+    }
+
+    /**
+     * Check if a product is allowed by the category filter.
+     *
+     * A product is allowed if any of its category paths matches or is a subcategory
+     * of any allowed path.
+     *
+     * @param array $data  Product data from API.
+     * @return bool
+     */
+    private function is_product_allowed( $data ) {
+        if ( empty( $data['categories'] ) || ! is_array( $data['categories'] ) ) {
+            return false;
+        }
+
+        foreach ( $data['categories'] as $product_path ) {
+            $product_path = trim( $product_path );
+            foreach ( $this->allowed_categories as $allowed_path ) {
+                // Exact match or the product path starts with the allowed path (subcategory).
+                if ( $product_path === $allowed_path || strpos( $product_path, $allowed_path . '>' ) === 0 ) {
+                    return true;
+                }
+                // Also allow if the allowed path is a child of the product path
+                // (user selected a more specific category and product belongs to it).
+                if ( strpos( $allowed_path, $product_path . '>' ) === 0 || $allowed_path === $product_path ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
