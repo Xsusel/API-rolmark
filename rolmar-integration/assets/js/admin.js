@@ -185,7 +185,14 @@
             if (response.success) {
                 $('#rolmar-category-tree').html(response.data.html);
                 $status.addClass('success').text(rolmarAdmin.i18n.treeLoaded);
+
+                // Restore previously checked categories (will also expand their parents).
                 restoreCheckedState();
+
+                // Count and display number of categories.
+                var totalNodes = $('.rolmar-tree-node').length;
+                var expandedNodes = $('.rolmar-tree-node.rolmar-tree-open').length;
+                $status.append(' (' + totalNodes + ' kategorii, ' + expandedNodes + ' rozwiniętych)');
             } else {
                 $status.addClass('error').text(response.data || rolmarAdmin.i18n.treeError);
             }
@@ -202,13 +209,29 @@
         $li.toggleClass('rolmar-tree-open');
     });
 
+    // Collapse all nodes.
+    $('#rolmar-collapse-all').on('click', function () {
+        $('.rolmar-tree-node').removeClass('rolmar-tree-open');
+    });
+
+    // Expand all nodes.
+    $('#rolmar-expand-all').on('click', function () {
+        $('.rolmar-tree-node').addClass('rolmar-tree-open');
+    });
+
     // Parent-child checkbox logic + sync hidden field.
     $(document).on('change', '.rolmar-cat-checkbox', function () {
         var $this = $(this);
         var isChecked = $this.is(':checked');
 
-        // Check/uncheck all descendant checkboxes.
-        $this.closest('.rolmar-tree-node').find('.rolmar-cat-checkbox').prop('checked', isChecked);
+        // Find all descendant checkboxes in the child tree list (not including this checkbox).
+        var $treeNode = $this.closest('.rolmar-tree-node');
+        var $childList = $treeNode.children('.rolmar-tree-list');
+
+        if ($childList.length) {
+            // Check/uncheck all descendant checkboxes in child nodes.
+            $childList.find('.rolmar-cat-checkbox').prop('checked', isChecked);
+        }
 
         // Update parent states (indeterminate / checked).
         updateParentCheckboxes($this);
