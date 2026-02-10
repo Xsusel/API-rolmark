@@ -637,7 +637,7 @@ class Rolmar_Admin {
                     $path_count++;
                 }
 
-                $parts = array_map( 'trim', explode( '>', $path ) );
+                $parts = array_map( 'trim', explode( '/', $path ) );
                 $parts = array_filter( $parts );
                 $ref   = &$tree;
                 foreach ( $parts as $part ) {
@@ -685,7 +685,7 @@ class Rolmar_Admin {
 
         $html = '<ul class="rolmar-tree-list">';
         foreach ( $tree as $name => $children ) {
-            $current_path = $parent_path ? $parent_path . '>' . $name : $name;
+            $current_path = $parent_path ? $parent_path . '/' . $name : $name;
             $escaped_path = esc_attr( $current_path );
             $escaped_name = esc_html( $name );
             $has_children = ! empty( $children );

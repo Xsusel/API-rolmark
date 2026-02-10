@@ -416,12 +416,12 @@ class Rolmar_Product_Importer {
             $product_path = trim( $product_path );
             foreach ( $this->allowed_categories as $allowed_path ) {
                 // Exact match or the product path starts with the allowed path (subcategory).
-                if ( $product_path === $allowed_path || strpos( $product_path, $allowed_path . '>' ) === 0 ) {
+                if ( $product_path === $allowed_path || strpos( $product_path, $allowed_path . '/' ) === 0 ) {
                     return true;
                 }
                 // Also allow if the allowed path is a child of the product path
                 // (user selected a more specific category and product belongs to it).
-                if ( strpos( $allowed_path, $product_path . '>' ) === 0 || $allowed_path === $product_path ) {
+                if ( strpos( $allowed_path, $product_path . '/' ) === 0 || $allowed_path === $product_path ) {
                     return true;
                 }
             }

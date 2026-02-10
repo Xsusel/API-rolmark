@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.2)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.3)');
 
     var pollInterval = null;
 
@@ -305,9 +305,9 @@
                 shouldInclude = false;
             } else {
                 // Check if any parent of this path is fully checked (not indeterminate).
-                var parts = path.split('>');
+                var parts = path.split('/');
                 for (var j = 1; j < parts.length; j++) {
-                    var parentPath = parts.slice(0, j).join('>');
+                    var parentPath = parts.slice(0, j).join('/');
 
                     // Find parent checkbox.
                     var $parentCheckbox = $('.rolmar-cat-checkbox[data-path="' + parentPath + '"]');
