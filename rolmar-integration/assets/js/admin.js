@@ -240,11 +240,56 @@
     }
 
     function syncCategorySelection() {
-        var selected = [];
+        var allChecked = [];
+
+        // Collect all checked paths.
         $('.rolmar-cat-checkbox:checked').each(function () {
-            selected.push($(this).data('path'));
+            allChecked.push($(this).data('path'));
         });
-        $('#rolmar_allowed_categories').val(JSON.stringify(selected));
+
+        // Optimize: remove child paths if parent is fully checked (all children are checked).
+        // This reduces storage - e.g., checking "TEGER" saves ["TEGER"] instead of 500 child paths.
+        var optimized = [];
+
+        for (var i = 0; i < allChecked.length; i++) {
+            var path = allChecked[i];
+            var shouldInclude = true;
+
+            // Get checkbox for this path to check if it's indeterminate.
+            var $thisCheckbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
+
+            // If this checkbox is indeterminate (partially checked), don't include it.
+            // Its children will be included individually instead.
+            if ($thisCheckbox.prop('indeterminate')) {
+                shouldInclude = false;
+            } else {
+                // Check if any parent of this path is fully checked (not indeterminate).
+                var parts = path.split('>');
+                for (var j = 1; j < parts.length; j++) {
+                    var parentPath = parts.slice(0, j).join('>');
+
+                    // Find parent checkbox.
+                    var $parentCheckbox = $('.rolmar-cat-checkbox[data-path="' + parentPath + '"]');
+                    if ($parentCheckbox.length && $parentCheckbox.is(':checked')) {
+                        // If parent is checked AND not indeterminate (all children checked),
+                        // then this child path is redundant - the parent path covers it.
+                        if (!$parentCheckbox.prop('indeterminate')) {
+                            shouldInclude = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (shouldInclude) {
+                optimized.push(path);
+            }
+        }
+
+        $('#rolmar_allowed_categories').val(JSON.stringify(optimized));
+
+        // Update selection count display.
+        updateSelectionCount(optimized.length);
     }
 
     function restoreCheckedState() {
@@ -280,6 +325,19 @@
         });
     }
 
+    function updateSelectionCount(count) {
+        var $counter = $('#rolmar-category-count');
+        if (!$counter.length) {
+            return;
+        }
+
+        if (count === 0) {
+            $counter.html('<em>' + rolmarAdmin.i18n.allCategories + '</em>');
+        } else {
+            $counter.text(count + ' ' + (count === 1 ? rolmarAdmin.i18n.categorySelected : rolmarAdmin.i18n.categoriesSelected));
+        }
+    }
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {
@@ -290,6 +348,10 @@
         if ($('#rolmar-category-tree .rolmar-cat-checkbox').length) {
             restoreCheckedState();
         }
+
+        // Update initial selection count.
+        var initialCount = JSON.parse($('#rolmar_allowed_categories').val() || '[]').length;
+        updateSelectionCount(initialCount);
     });
 
 })(jQuery);

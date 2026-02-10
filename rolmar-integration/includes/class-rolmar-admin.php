@@ -296,6 +296,12 @@ class Rolmar_Admin {
                 <span class="spinner" id="rolmar-tree-spinner" style="float:none;"></span>
                 <span id="rolmar-tree-status" class="rolmar-status-message"></span>
             </p>
+            <p class="description">
+                <?php esc_html_e( 'Zaznacz kategorie wyższego poziomu, aby automatycznie zaznaczyć wszystkie podkategorie. Możesz następnie odznaczyć poszczególne podkategorie.', 'rolmar-integration' ); ?>
+                <br />
+                <strong><?php esc_html_e( 'Wybrano:', 'rolmar-integration' ); ?></strong>
+                <span id="rolmar-category-count"></span>
+            </p>
             <div id="rolmar-category-tree" class="rolmar-category-tree">
                 <?php
                 if ( ! empty( $cached_html ) ) {
@@ -460,16 +466,19 @@ class Rolmar_Admin {
             'ajaxUrl' => admin_url( 'admin-ajax.php' ),
             'nonce'   => wp_create_nonce( 'rolmar_admin_nonce' ),
             'i18n'    => array(
-                'testing'        => __( 'Testowanie...', 'rolmar-integration' ),
-                'success'        => __( 'Połączenie udane!', 'rolmar-integration' ),
-                'error'          => __( 'Błąd połączenia', 'rolmar-integration' ),
-                'syncing'        => __( 'Synchronizacja w toku...', 'rolmar-integration' ),
-                'syncDone'       => __( 'Synchronizacja zakończona!', 'rolmar-integration' ),
-                'syncError'      => __( 'Błąd synchronizacji', 'rolmar-integration' ),
-                'confirmSync'    => __( 'Czy na pewno chcesz rozpocząć import produktów? Może to potrwać dłuższy czas.', 'rolmar-integration' ),
-                'loadingTree'    => __( 'Pobieranie struktury kategorii z API...', 'rolmar-integration' ),
-                'treeLoaded'     => __( 'Struktura kategorii została załadowana.', 'rolmar-integration' ),
-                'treeError'      => __( 'Błąd pobierania kategorii', 'rolmar-integration' ),
+                'testing'            => __( 'Testowanie...', 'rolmar-integration' ),
+                'success'            => __( 'Połączenie udane!', 'rolmar-integration' ),
+                'error'              => __( 'Błąd połączenia', 'rolmar-integration' ),
+                'syncing'            => __( 'Synchronizacja w toku...', 'rolmar-integration' ),
+                'syncDone'           => __( 'Synchronizacja zakończona!', 'rolmar-integration' ),
+                'syncError'          => __( 'Błąd synchronizacji', 'rolmar-integration' ),
+                'confirmSync'        => __( 'Czy na pewno chcesz rozpocząć import produktów? Może to potrwać dłuższy czas.', 'rolmar-integration' ),
+                'loadingTree'        => __( 'Pobieranie struktury kategorii z API...', 'rolmar-integration' ),
+                'treeLoaded'         => __( 'Struktura kategorii została załadowana.', 'rolmar-integration' ),
+                'treeError'          => __( 'Błąd pobierania kategorii', 'rolmar-integration' ),
+                'allCategories'      => __( 'Wszystkie kategorie (brak filtra)', 'rolmar-integration' ),
+                'categorySelected'   => __( 'wybrana kategoria', 'rolmar-integration' ),
+                'categoriesSelected' => __( 'wybranych kategorii', 'rolmar-integration' ),
             ),
         ) );
     }
