@@ -639,6 +639,14 @@ class Rolmar_Admin {
 
                 $parts = array_map( 'trim', explode( '/', $path ) );
                 $parts = array_filter( $parts );
+
+                // Debug first path
+                if ( $path_count === 1 ) {
+                    Rolmar_Logger::info( 'DEBUG Path: ' . $path, 'api' );
+                    Rolmar_Logger::info( 'DEBUG Parts count: ' . count( $parts ), 'api' );
+                    Rolmar_Logger::info( 'DEBUG Parts: ' . wp_json_encode( $parts ), 'api' );
+                }
+
                 $ref   = &$tree;
                 foreach ( $parts as $part ) {
                     if ( ! isset( $ref[ $part ] ) ) {
@@ -653,7 +661,18 @@ class Rolmar_Admin {
         // Log sample paths and tree structure for debugging
         Rolmar_Logger::info( 'Sample category paths from API: ' . wp_json_encode( $sample_paths ), 'api' );
         Rolmar_Logger::info( 'Tree root level count: ' . count( $tree ), 'api' );
-        Rolmar_Logger::info( 'First 3 root categories: ' . wp_json_encode( array_slice( array_keys( $tree ), 0, 3 ) ), 'api' );
+
+        $root_keys = array_keys( $tree );
+        Rolmar_Logger::info( 'First 3 root categories: ' . wp_json_encode( array_slice( $root_keys, 0, 3 ) ), 'api' );
+
+        // Debug: check if first root has children
+        if ( ! empty( $root_keys[0] ) && isset( $tree[ $root_keys[0] ] ) ) {
+            $first_root_children_count = count( $tree[ $root_keys[0] ] );
+            Rolmar_Logger::info( 'First root "' . $root_keys[0] . '" has ' . $first_root_children_count . ' children', 'api' );
+            if ( $first_root_children_count > 0 ) {
+                Rolmar_Logger::info( 'First root children: ' . wp_json_encode( array_slice( array_keys( $tree[ $root_keys[0] ] ), 0, 3 ) ), 'api' );
+            }
+        }
 
         // Sort tree alphabetically at each level.
         $this->sort_tree_recursive( $tree );
