@@ -4,6 +4,8 @@
 (function ($) {
     'use strict';
 
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.1)');
+
     var pollInterval = null;
 
     // Test Connection
@@ -167,6 +169,7 @@
 
     // Refresh category tree from API.
     $('#rolmar-refresh-tree').on('click', function () {
+        console.log('[Rolmar] Odświeżanie drzewa kategorii...');
         var $btn = $(this);
         var $spinner = $('#rolmar-tree-spinner');
         var $status = $('#rolmar-tree-status');
@@ -179,6 +182,7 @@
             action: 'rolmar_load_category_tree',
             nonce: rolmarAdmin.nonce
         }, function (response) {
+            console.log('[Rolmar] Odpowiedź AJAX:', response);
             $btn.prop('disabled', false);
             $spinner.removeClass('is-active');
 
@@ -192,11 +196,14 @@
                 // Count and display number of categories.
                 var totalNodes = $('.rolmar-tree-node').length;
                 var expandedNodes = $('.rolmar-tree-node.rolmar-tree-open').length;
+                console.log('[Rolmar] Załadowano ' + totalNodes + ' węzłów, ' + expandedNodes + ' rozwiniętych');
                 $status.append(' (' + totalNodes + ' kategorii, ' + expandedNodes + ' rozwiniętych)');
             } else {
+                console.error('[Rolmar] Błąd ładowania drzewa:', response.data);
                 $status.addClass('error').text(response.data || rolmarAdmin.i18n.treeError);
             }
-        }).fail(function () {
+        }).fail(function (jqXHR, textStatus, errorThrown) {
+            console.error('[Rolmar] Błąd AJAX:', textStatus, errorThrown);
             $btn.prop('disabled', false);
             $spinner.removeClass('is-active');
             $status.addClass('error').text(rolmarAdmin.i18n.treeError);
@@ -211,12 +218,16 @@
 
     // Collapse all nodes.
     $('#rolmar-collapse-all').on('click', function () {
+        console.log('[Rolmar] Zwijanie wszystkich kategorii...');
         $('.rolmar-tree-node').removeClass('rolmar-tree-open');
+        console.log('[Rolmar] Zwinięto ' + $('.rolmar-tree-node').length + ' węzłów');
     });
 
     // Expand all nodes.
     $('#rolmar-expand-all').on('click', function () {
+        console.log('[Rolmar] Rozwijanie wszystkich kategorii...');
         $('.rolmar-tree-node').addClass('rolmar-tree-open');
+        console.log('[Rolmar] Rozwinięto ' + $('.rolmar-tree-node').length + ' węzłów');
     });
 
     // Parent-child checkbox logic + sync hidden field.
