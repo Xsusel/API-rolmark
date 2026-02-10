@@ -75,13 +75,14 @@
 
 /* Category tree */
 .rolmar-category-tree {
-    max-height: 500px;
+    max-height: 600px;
     overflow-y: auto;
     border: 1px solid #ccd0d4;
     border-radius: 4px;
     padding: 10px;
     background: #fff;
     margin-top: 10px;
+    font-size: 13px;
 }
 
 .rolmar-tree-list {
@@ -126,10 +127,23 @@
     width: 20px;
 }
 
+.rolmar-tree-node {
+    line-height: 1.8;
+}
+
 .rolmar-tree-node label {
     cursor: pointer;
     vertical-align: middle;
     font-size: 13px;
+    padding: 2px 0;
+    display: inline-block;
+}
+
+.rolmar-tree-node label:hover {
+    background-color: #f0f0f1;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: 0 -4px;
 }
 
 .rolmar-cat-checkbox {

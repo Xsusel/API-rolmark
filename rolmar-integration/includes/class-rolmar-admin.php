@@ -302,6 +302,14 @@ class Rolmar_Admin {
                 <strong><?php esc_html_e( 'Wybrano:', 'rolmar-integration' ); ?></strong>
                 <span id="rolmar-category-count"></span>
             </p>
+            <p>
+                <button type="button" id="rolmar-expand-all" class="button button-small">
+                    <?php esc_html_e( 'Rozwiń wszystkie', 'rolmar-integration' ); ?>
+                </button>
+                <button type="button" id="rolmar-collapse-all" class="button button-small">
+                    <?php esc_html_e( 'Zwiń wszystkie', 'rolmar-integration' ); ?>
+                </button>
+            </p>
             <div id="rolmar-category-tree" class="rolmar-category-tree">
                 <?php
                 if ( ! empty( $cached_html ) ) {
@@ -594,6 +602,9 @@ class Rolmar_Admin {
         if ( ! current_user_can( 'manage_woocommerce' ) ) {
             wp_send_json_error( __( 'Brak uprawnień.', 'rolmar-integration' ) );
         }
+
+        // Clear old cached HTML to force regeneration.
+        delete_option( 'rolmar_category_tree_html' );
 
         // Increase limits for large product catalog.
         @set_time_limit( 0 );
