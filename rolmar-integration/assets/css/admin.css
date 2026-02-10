@@ -137,6 +137,15 @@
     vertical-align: middle;
 }
 
+.rolmar-cat-checkbox:indeterminate {
+    opacity: 0.7;
+}
+
+#rolmar-category-count {
+    font-weight: 600;
+    color: #0073aa;
+}
+
 #rolmar-tree-spinner {
     vertical-align: middle;
 }
