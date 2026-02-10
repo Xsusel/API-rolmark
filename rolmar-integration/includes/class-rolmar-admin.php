@@ -623,11 +623,20 @@ class Rolmar_Admin {
 
         // Extract unique category paths and build tree structure.
         $tree = array();
+        $sample_paths = array(); // For debugging
+        $path_count = 0;
+
         foreach ( $products as $product ) {
             if ( empty( $product['categories'] ) || ! is_array( $product['categories'] ) ) {
                 continue;
             }
             foreach ( $product['categories'] as $path ) {
+                // Save first 5 paths for debugging
+                if ( $path_count < 5 ) {
+                    $sample_paths[] = $path;
+                    $path_count++;
+                }
+
                 $parts = array_map( 'trim', explode( '>', $path ) );
                 $parts = array_filter( $parts );
                 $ref   = &$tree;
@@ -640,6 +649,11 @@ class Rolmar_Admin {
                 unset( $ref );
             }
         }
+
+        // Log sample paths and tree structure for debugging
+        Rolmar_Logger::info( 'Sample category paths from API: ' . wp_json_encode( $sample_paths ), 'api' );
+        Rolmar_Logger::info( 'Tree root level count: ' . count( $tree ), 'api' );
+        Rolmar_Logger::info( 'First 3 root categories: ' . wp_json_encode( array_slice( array_keys( $tree ), 0, 3 ) ), 'api' );
 
         // Sort tree alphabetically at each level.
         $this->sort_tree_recursive( $tree );

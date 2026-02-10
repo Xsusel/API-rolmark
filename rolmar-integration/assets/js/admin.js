@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.1)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.2)');
 
     var pollInterval = null;
 
@@ -190,13 +190,20 @@
                 $('#rolmar-category-tree').html(response.data.html);
                 $status.addClass('success').text(rolmarAdmin.i18n.treeLoaded);
 
+                // Debug: show HTML structure
+                var htmlSample = response.data.html.substring(0, 500);
+                console.log('[Rolmar] Przykład HTML:', htmlSample);
+
                 // Restore previously checked categories (will also expand their parents).
                 restoreCheckedState();
 
                 // Count and display number of categories.
                 var totalNodes = $('.rolmar-tree-node').length;
                 var expandedNodes = $('.rolmar-tree-node.rolmar-tree-open').length;
+                var nestedLists = $('.rolmar-tree-list .rolmar-tree-list').length;
                 console.log('[Rolmar] Załadowano ' + totalNodes + ' węzłów, ' + expandedNodes + ' rozwiniętych');
+                console.log('[Rolmar] Zagnieżdżonych list: ' + nestedLists);
+                console.log('[Rolmar] Strzałki: ' + $('.rolmar-tree-toggle').length);
                 $status.append(' (' + totalNodes + ' kategorii, ' + expandedNodes + ' rozwiniętych)');
             } else {
                 console.error('[Rolmar] Błąd ładowania drzewa:', response.data);
