@@ -280,6 +280,12 @@ class Rolmar_Product_Importer {
 
         // Main photo (only on creation or if no image exists).
         if ( $this->import_images && ! empty( $data['mainPhoto'] ) ) {
+            // Debug: Log first few raw mainPhoto values to understand API response format.
+            static $debug_count = 0;
+            if ( $debug_count < 3 ) {
+                Rolmar_Logger::info( "DEBUG RAW mainPhoto for {$sku}: " . print_r( $data['mainPhoto'], true ), 'import' );
+                $debug_count++;
+            }
             $this->maybe_set_product_image( $product_id, $data['mainPhoto'], $sku );
         }
 
