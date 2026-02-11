@@ -458,15 +458,30 @@ class Rolmar_Product_Importer {
      * Set product featured image if not already set.
      */
     private function maybe_set_product_image( $product_id, $image_url, $sku ) {
-        // Skip if product already has a featured image.
+        // Log image processing attempt.
+        Rolmar_Logger::info( "Processing image for {$sku}: URL = " . esc_url( $image_url ), 'import' );
+
+        // Check if product already has a valid featured image.
         $existing_thumbnail = get_post_thumbnail_id( $product_id );
         if ( $existing_thumbnail ) {
-            return;
+            // Verify the existing image actually exists.
+            $existing_file = get_attached_file( $existing_thumbnail );
+            if ( $existing_file && file_exists( $existing_file ) ) {
+                Rolmar_Logger::info( "Product {$sku} already has valid image (ID: {$existing_thumbnail}), skipping download.", 'import' );
+                return;
+            } else {
+                // Existing thumbnail ID is invalid - remove it and download new image.
+                Rolmar_Logger::info( "Product {$sku} has invalid image reference (ID: {$existing_thumbnail}), will download new image.", 'import' );
+                delete_post_thumbnail( $product_id );
+            }
         }
 
         $image_id = $this->upload_image_from_url( $image_url, $sku );
         if ( $image_id ) {
             set_post_thumbnail( $product_id, $image_id );
+            Rolmar_Logger::info( "Successfully set image for {$sku} (Image ID: {$image_id})", 'import' );
+        } else {
+            Rolmar_Logger::warning( "Failed to set image for {$sku}", 'import' );
         }
     }
 
@@ -479,10 +494,17 @@ class Rolmar_Product_Importer {
      */
     private function upload_image_from_url( $url, $sku ) {
         // Validate URL before attempting download.
-        if ( empty( $url ) || ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
-            Rolmar_Logger::warning( "Invalid image URL for {$sku}: " . esc_url( $url ), 'import' );
+        if ( empty( $url ) ) {
+            Rolmar_Logger::warning( "No image URL provided for {$sku}", 'import' );
             return false;
         }
+
+        if ( ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+            Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$url}", 'import' );
+            return false;
+        }
+
+        Rolmar_Logger::info( "Attempting to download image for {$sku} from: {$url}", 'import' );
 
         if ( ! function_exists( 'media_sideload_image' ) ) {
             require_once ABSPATH . 'wp-admin/includes/media.php';
@@ -495,9 +517,13 @@ class Rolmar_Product_Importer {
 
         if ( is_wp_error( $tmp ) ) {
             $error_message = $tmp->get_error_message();
-            // Only log as warning for non-404 errors to reduce noise.
-            if ( strpos( $error_message, 'Not Found' ) === false && strpos( $error_message, '404' ) === false ) {
-                Rolmar_Logger::warning( "Failed to download image for {$sku}: {$error_message} (URL: {$url})", 'import' );
+            $error_code = $tmp->get_error_code();
+
+            // Log with appropriate level based on error type.
+            if ( strpos( $error_message, 'Not Found' ) !== false || strpos( $error_message, '404' ) !== false ) {
+                Rolmar_Logger::warning( "Image not found (404) for {$sku}: {$url}", 'import' );
+            } else {
+                Rolmar_Logger::error( "Failed to download image for {$sku}: [{$error_code}] {$error_message} | URL: {$url}", 'import' );
             }
             return false;
         }
@@ -514,11 +540,13 @@ class Rolmar_Product_Importer {
         $attachment_id = media_handle_sideload( $file_array, 0 );
 
         if ( is_wp_error( $attachment_id ) ) {
-            Rolmar_Logger::warning( "Failed to sideload image for {$sku}: " . $attachment_id->get_error_message(), 'import' );
+            $error_msg = $attachment_id->get_error_message();
+            Rolmar_Logger::error( "Failed to import image to media library for {$sku}: {$error_msg}", 'import' );
             @unlink( $tmp );
             return false;
         }
 
+        Rolmar_Logger::info( "Successfully uploaded image for {$sku} (Attachment ID: {$attachment_id})", 'import' );
         return $attachment_id;
     }
 
