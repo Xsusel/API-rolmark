@@ -379,6 +379,59 @@
         }
     }
 
+    // Debug Images Button
+    $('#rolmar-debug-images').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-debug-result');
+
+        $btn.prop('disabled', true).text('Testowanie...');
+        $result.html('<p>Pobieranie danych z API...</p>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_debug_images',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('Testuj obrazki (pierwsze 5 produktów)');
+
+            if (response.success && response.data.results) {
+                var html = '<div class="notice notice-info" style="padding: 10px;"><table class="widefat striped" style="margin-top: 10px;">';
+                html += '<thead><tr>';
+                html += '<th>SKU</th>';
+                html += '<th>Oryginalny URL</th>';
+                html += '<th>Czysty URL</th>';
+                html += '<th>HTTP</th>';
+                html += '<th>Status</th>';
+                html += '</tr></thead><tbody>';
+
+                response.data.results.forEach(function (item) {
+                    var statusClass = item.status === 'OK' ? 'success' : 'error';
+                    var statusColor = item.status === 'OK' ? 'green' : 'red';
+
+                    html += '<tr>';
+                    html += '<td><strong>' + item.sku + '</strong></td>';
+                    html += '<td style="font-size: 11px; word-break: break-all;">' + item.original_url + '</td>';
+                    html += '<td style="font-size: 11px; word-break: break-all;">';
+                    if (item.original_url !== item.cleaned_url) {
+                        html += '<span style="background: #fff3cd; padding: 2px 4px;">ZMIENIONY</span><br>';
+                    }
+                    html += item.cleaned_url;
+                    html += '</td>';
+                    html += '<td>' + item.http_code + '</td>';
+                    html += '<td style="color: ' + statusColor + '; font-weight: bold;">' + item.status + '</td>';
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table></div>';
+                $result.html(html);
+            } else {
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false).text('Testuj obrazki (pierwsze 5 produktów)');
+            $result.html('<div class="notice notice-error"><p>Błąd połączenia z serwerem.</p></div>');
+        });
+    });
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {

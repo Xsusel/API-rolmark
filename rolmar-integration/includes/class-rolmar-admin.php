@@ -28,6 +28,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_sync_photos', array( $this, 'ajax_sync_photos' ) );
         add_action( 'wp_ajax_rolmar_get_sync_status', array( $this, 'ajax_get_sync_status' ) );
         add_action( 'wp_ajax_rolmar_load_category_tree', array( $this, 'ajax_load_category_tree' ) );
+        add_action( 'wp_ajax_rolmar_debug_images', array( $this, 'ajax_debug_images' ) );
     }
 
     public function add_menu() {
@@ -350,6 +351,18 @@ class Rolmar_Admin {
                 </button>
                 <span id="rolmar-test-result" class="rolmar-status-message"></span>
             </p>
+
+            <hr />
+            <h2><?php esc_html_e( 'Debug obrazków', 'rolmar-integration' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Sprawdź jak wyglądają URLe obrazków z API i czy są dostępne.', 'rolmar-integration' ); ?>
+            </p>
+            <p>
+                <button type="button" id="rolmar-debug-images" class="button button-secondary">
+                    <?php esc_html_e( 'Testuj obrazki (pierwsze 5 produktów)', 'rolmar-integration' ); ?>
+                </button>
+            </p>
+            <div id="rolmar-debug-result" style="margin-top: 15px;"></div>
         </div>
         <?php
     }
@@ -729,5 +742,61 @@ class Rolmar_Admin {
         $html .= '</ul>';
 
         return $html;
+    }
+
+    /**
+     * AJAX handler to debug image URLs from API.
+     */
+    public function ajax_debug_images() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnień.' ) );
+        }
+
+        $api = Rolmar_API::instance();
+        $response = $api->get_products( 1, 5 ); // First 5 products.
+
+        if ( is_wp_error( $response ) ) {
+            wp_send_json_error( array(
+                'message' => 'Błąd API: ' . $response->get_error_message()
+            ) );
+        }
+
+        $products = isset( $response['products'] ) ? $response['products'] : array();
+        $results = array();
+
+        foreach ( $products as $product ) {
+            $sku = isset( $product['sku'] ) ? $product['sku'] : 'N/A';
+            $main_photo = isset( $product['mainPhoto'] ) ? $product['mainPhoto'] : '';
+
+            // Clean URL the same way as in the importer.
+            $original_url = $main_photo;
+            $cleaned_url = rtrim( $main_photo, '. ' );
+            $cleaned_url = preg_replace( '/\?c=-[^&]*$/', '', $cleaned_url );
+
+            // Test if URL is accessible.
+            $status = 'unknown';
+            $http_code = 0;
+            if ( ! empty( $cleaned_url ) ) {
+                $test_response = wp_remote_head( $cleaned_url, array( 'timeout' => 10 ) );
+                if ( ! is_wp_error( $test_response ) ) {
+                    $http_code = wp_remote_retrieve_response_code( $test_response );
+                    $status = ( $http_code === 200 ) ? 'OK' : 'FAIL';
+                } else {
+                    $status = 'ERROR: ' . $test_response->get_error_message();
+                }
+            }
+
+            $results[] = array(
+                'sku' => $sku,
+                'original_url' => $original_url,
+                'cleaned_url' => $cleaned_url,
+                'http_code' => $http_code,
+                'status' => $status,
+            );
+        }
+
+        wp_send_json_success( array( 'results' => $results ) );
     }
 }
