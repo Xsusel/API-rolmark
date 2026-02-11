@@ -499,6 +499,19 @@ class Rolmar_Product_Importer {
             return false;
         }
 
+        // Clean up malformed URLs from API.
+        $original_url = $url;
+
+        // Remove trailing dots and spaces.
+        $url = rtrim( $url, '. ' );
+
+        // Fix malformed query parameters (e.g., "?c=-bth.." -> remove the parameter entirely).
+        $url = preg_replace( '/\?c=-[^&]*$/', '', $url );
+
+        if ( $original_url !== $url ) {
+            Rolmar_Logger::info( "Cleaned malformed URL for {$sku}: {$original_url} -> {$url}", 'import' );
+        }
+
         if ( ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
             Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$url}", 'import' );
             return false;
