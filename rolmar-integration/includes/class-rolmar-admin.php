@@ -773,7 +773,21 @@ class Rolmar_Admin {
 
         foreach ( $products as $product ) {
             $sku = isset( $product['sku'] ) ? $product['sku'] : 'N/A';
+            $name = isset( $product['name'] ) ? $product['name'] : 'N/A';
+            $index = isset( $product['productIndex'] ) ? $product['productIndex'] : 'N/A';
             $main_photo = isset( $product['mainPhoto'] ) ? $product['mainPhoto'] : '';
+
+            // Check for alternative image fields.
+            $alt_photos = array();
+            if ( isset( $product['photos'] ) && is_array( $product['photos'] ) ) {
+                $alt_photos = $product['photos'];
+            }
+            if ( isset( $product['photo'] ) ) {
+                $alt_photos[] = $product['photo'];
+            }
+            if ( isset( $product['image'] ) ) {
+                $alt_photos[] = $product['image'];
+            }
 
             // Clean URL the same way as in the importer.
             $original_url = $main_photo;
@@ -783,22 +797,35 @@ class Rolmar_Admin {
             // Test if URL is accessible.
             $status = 'unknown';
             $http_code = 0;
+            $error_msg = '';
             if ( ! empty( $cleaned_url ) ) {
-                $test_response = wp_remote_head( $cleaned_url, array( 'timeout' => 10 ) );
+                $test_response = wp_remote_head( $cleaned_url, array(
+                    'timeout' => 10,
+                    'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                ) );
                 if ( ! is_wp_error( $test_response ) ) {
                     $http_code = wp_remote_retrieve_response_code( $test_response );
                     $status = ( $http_code === 200 ) ? 'OK' : 'FAIL';
                 } else {
-                    $status = 'ERROR: ' . $test_response->get_error_message();
+                    $status = 'ERROR';
+                    $error_msg = $test_response->get_error_message();
                 }
+            } else {
+                $status = 'EMPTY';
+                $error_msg = 'Brak URL w API';
             }
 
             $results[] = array(
+                'index' => $index,
+                'name' => $name,
                 'sku' => $sku,
                 'original_url' => $original_url,
                 'cleaned_url' => $cleaned_url,
                 'http_code' => $http_code,
                 'status' => $status,
+                'error' => $error_msg,
+                'alt_photos' => $alt_photos,
+                'all_fields' => array_keys( $product ), // Show all available fields for debugging.
             );
         }
 
