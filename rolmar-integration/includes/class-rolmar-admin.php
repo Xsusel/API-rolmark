@@ -29,6 +29,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_get_sync_status', array( $this, 'ajax_get_sync_status' ) );
         add_action( 'wp_ajax_rolmar_load_category_tree', array( $this, 'ajax_load_category_tree' ) );
         add_action( 'wp_ajax_rolmar_debug_images', array( $this, 'ajax_debug_images' ) );
+        add_action( 'wp_ajax_rolmar_debug_photos_api', array( $this, 'ajax_debug_photos_api' ) );
     }
 
     public function add_menu() {
@@ -359,7 +360,10 @@ class Rolmar_Admin {
             </p>
             <p>
                 <button type="button" id="rolmar-debug-images" class="button button-secondary">
-                    <?php esc_html_e( 'Testuj obrazki (pierwsze 5 produktów)', 'rolmar-integration' ); ?>
+                    <?php esc_html_e( 'Testuj mainPhoto (getProducts)', 'rolmar-integration' ); ?>
+                </button>
+                <button type="button" id="rolmar-debug-photos-api" class="button button-primary">
+                    <?php esc_html_e( 'Testuj getPhotos API ⭐', 'rolmar-integration' ); ?>
                 </button>
             </p>
             <div id="rolmar-debug-result" style="margin-top: 15px;"></div>
@@ -830,5 +834,96 @@ class Rolmar_Admin {
         }
 
         wp_send_json_success( array( 'results' => $results ) );
+    }
+
+    /**
+     * AJAX handler to test getPhotos API endpoint.
+     */
+    public function ajax_debug_photos_api() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnień.' ) );
+        }
+
+        $api = new Rolmar_API_Client();
+        $photos = $api->get_photos();
+
+        if ( is_wp_error( $photos ) ) {
+            wp_send_json_error( array(
+                'message' => 'Błąd API getPhotos: ' . $photos->get_error_message()
+            ) );
+        }
+
+        if ( ! is_array( $photos ) ) {
+            wp_send_json_error( array( 'message' => 'getPhotos zwróciło nieprawidłowe dane (nie array).' ) );
+        }
+
+        // Take first 5 entries.
+        $total_count = count( $photos );
+        $photos_sample = array_slice( $photos, 0, 5 );
+        $results = array();
+
+        foreach ( $photos_sample as $item ) {
+            // Extract product identifier.
+            $identifier = 'N/A';
+            if ( isset( $item['productIndex'] ) ) {
+                $identifier = $item['productIndex'];
+            } elseif ( isset( $item['index'] ) ) {
+                $identifier = $item['index'];
+            } elseif ( isset( $item['sku'] ) ) {
+                $identifier = $item['sku'];
+            }
+
+            // Extract photo URLs.
+            $photo_urls = array();
+            if ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+                $photo_urls = $item['photos'];
+            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
+                $photo_urls = $item['images'];
+            } elseif ( isset( $item['photo'] ) ) {
+                $photo_urls = array( $item['photo'] );
+            } elseif ( isset( $item['image'] ) ) {
+                $photo_urls = array( $item['image'] );
+            }
+
+            // Check if product exists in WooCommerce.
+            $product_id = wc_get_product_id_by_sku( $identifier );
+            $wc_status = $product_id ? 'Znaleziony (ID: ' . $product_id . ')' : 'NIE ZNALEZIONY';
+
+            // Test first photo URL if available.
+            $first_photo_status = 'N/A';
+            $first_photo_http = 0;
+            if ( ! empty( $photo_urls[0] ) ) {
+                $test_response = wp_remote_head( $photo_urls[0], array(
+                    'timeout' => 10,
+                    'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                ) );
+                if ( ! is_wp_error( $test_response ) ) {
+                    $first_photo_http = wp_remote_retrieve_response_code( $test_response );
+                    $first_photo_status = ( $first_photo_http === 200 ) ? 'OK ✅' : 'FAIL ❌';
+                } else {
+                    $first_photo_status = 'ERROR: ' . $test_response->get_error_message();
+                }
+            } else {
+                $first_photo_status = 'BRAK URL';
+            }
+
+            $results[] = array(
+                'identifier' => $identifier,
+                'photo_count' => count( $photo_urls ),
+                'photo_urls' => $photo_urls,
+                'wc_status' => $wc_status,
+                'wc_product_id' => $product_id,
+                'first_photo_status' => $first_photo_status,
+                'first_photo_http' => $first_photo_http,
+                'raw_data' => $item, // Full item for debugging.
+            );
+        }
+
+        wp_send_json_success( array(
+            'total_entries' => $total_count,
+            'results' => $results
+        ) );
     }
 }
