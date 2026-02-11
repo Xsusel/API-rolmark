@@ -879,9 +879,12 @@ class Rolmar_Admin {
                 $identifier = $item['sku'];
             }
 
-            // Extract photo URLs.
+            // Extract photo URLs - API returns 'url' field with single URL.
             $photo_urls = array();
-            if ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+            if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                // getPhotos returns single 'url' field
+                $photo_urls = array( $item['url'] );
+            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                 $photo_urls = $item['photos'];
             } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
                 $photo_urls = $item['images'];
@@ -982,9 +985,12 @@ class Rolmar_Admin {
             }
 
             if ( $identifier ) {
-                // Extract photos.
+                // Extract photos - API returns 'url' field with single URL.
                 $photo_urls = array();
-                if ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+                if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                    // getPhotos returns single 'url' field
+                    $photo_urls = array( $item['url'] );
+                } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                     $photo_urls = $item['photos'];
                 } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
                     $photo_urls = $item['images'];
