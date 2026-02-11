@@ -38,6 +38,9 @@ class Rolmar_Product_Importer {
     public function run_import() {
         Rolmar_Logger::info( 'Starting product import...', 'import' );
 
+        // Ensure common attributes exist before import starts.
+        $this->ensure_common_attributes();
+
         $this->update_progress( 'fetching', __( 'Pobieranie produktów z API...', 'rolmar-integration' ) );
 
         $products = $this->api->get_products();
@@ -605,6 +608,57 @@ class Rolmar_Product_Importer {
                 'query_var'    => true,
                 'rewrite'      => false,
             ) );
+        }
+    }
+
+    /**
+     * Ensure common product attributes exist before import.
+     * This runs automatically at the start of each import, requiring no manual intervention.
+     */
+    private function ensure_common_attributes() {
+        global $wpdb;
+
+        $common_attributes = array(
+            array(
+                'slug'  => 'marka',
+                'label' => __( 'Marka', 'rolmar-integration' ),
+            ),
+        );
+
+        foreach ( $common_attributes as $attr ) {
+            $slug  = $attr['slug'];
+            $label = $attr['label'];
+
+            // Check if attribute already exists in database.
+            $existing = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT attribute_id FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
+                    $slug
+                )
+            );
+
+            if ( ! $existing ) {
+                // Insert directly into database.
+                $inserted = $wpdb->insert(
+                    $wpdb->prefix . 'woocommerce_attribute_taxonomies',
+                    array(
+                        'attribute_name'    => $slug,
+                        'attribute_label'   => $label,
+                        'attribute_type'    => 'select',
+                        'attribute_orderby' => 'menu_order',
+                        'attribute_public'  => 0,
+                    ),
+                    array( '%s', '%s', '%s', '%s', '%d' )
+                );
+
+                if ( $inserted ) {
+                    Rolmar_Logger::info( "Auto-created attribute '{$slug}' (ID: {$wpdb->insert_id})", 'import' );
+                    delete_transient( 'wc_attribute_taxonomies' );
+                }
+            }
+
+            // Always ensure taxonomy is registered.
+            $this->ensure_taxonomy_registered( $slug, $label );
         }
     }
 
