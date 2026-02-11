@@ -777,6 +777,18 @@ class Rolmar_Admin {
             $index = isset( $product['productIndex'] ) ? $product['productIndex'] : 'N/A';
             $main_photo = isset( $product['mainPhoto'] ) ? $product['mainPhoto'] : '';
 
+            // Check for alternative image fields.
+            $alt_photos = array();
+            if ( isset( $product['photos'] ) && is_array( $product['photos'] ) ) {
+                $alt_photos = $product['photos'];
+            }
+            if ( isset( $product['photo'] ) ) {
+                $alt_photos[] = $product['photo'];
+            }
+            if ( isset( $product['image'] ) ) {
+                $alt_photos[] = $product['image'];
+            }
+
             // Clean URL the same way as in the importer.
             $original_url = $main_photo;
             $cleaned_url = rtrim( $main_photo, '. ' );
@@ -812,6 +824,8 @@ class Rolmar_Admin {
                 'http_code' => $http_code,
                 'status' => $status,
                 'error' => $error_msg,
+                'alt_photos' => $alt_photos,
+                'all_fields' => array_keys( $product ), // Show all available fields for debugging.
             );
         }
 

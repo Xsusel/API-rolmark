@@ -415,13 +415,31 @@
 
                     html += '<tr>';
                     html += '<td><code>' + item.index + '</code></td>';
-                    html += '<td style="font-size: 11px;"><strong>' + item.name + '</strong><br><small style="color:#666;">SKU: ' + item.sku + '</small></td>';
+                    html += '<td style="font-size: 11px;">';
+                    html += '<strong>' + item.name + '</strong><br>';
+                    html += '<small style="color:#666;">SKU: ' + item.sku + '</small><br>';
+                    if (item.alt_photos && item.alt_photos.length > 0) {
+                        html += '<small style="color:blue;">⚠️ Ma ' + item.alt_photos.length + ' alternatywnych zdjęć!</small><br>';
+                    }
+                    if (item.all_fields && item.all_fields.length > 0) {
+                        html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:10px;color:#666;">Pokaż wszystkie pola API (' + item.all_fields.length + ')</summary>';
+                        html += '<code style="font-size:9px;">' + item.all_fields.join(', ') + '</code></details>';
+                    }
+                    html += '</td>';
                     html += '<td style="font-size: 10px; word-break: break-all; max-width: 350px;">' + (item.original_url || '<em>brak</em>') + '</td>';
                     html += '<td style="font-size: 10px; word-break: break-all; max-width: 350px;">';
                     if (item.original_url && item.original_url !== item.cleaned_url) {
                         html += '<span style="background: #fff3cd; padding: 2px 4px; font-size: 9px;">ZMIENIONY</span><br>';
                     }
                     html += (item.cleaned_url || '<em>brak</em>');
+                    if (item.alt_photos && item.alt_photos.length > 0) {
+                        html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Alternatywne zdjęcia (' + item.alt_photos.length + ')</summary>';
+                        html += '<ul style="margin:5px 0;padding-left:15px;font-size:9px;">';
+                        item.alt_photos.forEach(function(photo) {
+                            html += '<li style="word-break:break-all;">' + photo + '</li>';
+                        });
+                        html += '</ul></details>';
+                    }
                     html += '</td>';
                     html += '<td style="text-align: center;">' + (item.http_code || '-') + '</td>';
                     html += '<td style="color: ' + statusColor + '; font-weight: bold; text-align: center;">' + statusText + '</td>';
