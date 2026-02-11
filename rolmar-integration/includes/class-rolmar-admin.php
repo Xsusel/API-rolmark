@@ -754,16 +754,21 @@ class Rolmar_Admin {
             wp_send_json_error( array( 'message' => 'Brak uprawnień.' ) );
         }
 
-        $api = Rolmar_API::instance();
-        $response = $api->get_products( 1, 5 ); // First 5 products.
+        $api = new Rolmar_API_Client();
+        $products = $api->get_products(); // Get all products.
 
-        if ( is_wp_error( $response ) ) {
+        if ( is_wp_error( $products ) ) {
             wp_send_json_error( array(
-                'message' => 'Błąd API: ' . $response->get_error_message()
+                'message' => 'Błąd API: ' . $products->get_error_message()
             ) );
         }
 
-        $products = isset( $response['products'] ) ? $response['products'] : array();
+        if ( ! is_array( $products ) ) {
+            wp_send_json_error( array( 'message' => 'API zwróciło nieprawidłowe dane.' ) );
+        }
+
+        // Take only first 5 products.
+        $products = array_slice( $products, 0, 5 );
         $results = array();
 
         foreach ( $products as $product ) {
