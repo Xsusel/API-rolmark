@@ -407,25 +407,64 @@ class Rolmar_Product_Importer {
             foreach ( $parts as $cat_name ) {
                 if ( empty( $cat_name ) ) continue;
 
-                $term = term_exists( $cat_name, 'product_cat', $parent_id );
-                if ( ! $term ) {
-                    $term = wp_insert_term( $cat_name, 'product_cat', array('parent' => $parent_id) );
-                }
+                // Find or create term with proper parent handling.
+                $term_id = $this->get_or_create_category( $cat_name, $parent_id );
 
-                if ( ! is_wp_error( $term ) ) {
-                    $last_term_id = is_array( $term ) ? intval( $term['term_id'] ) : intval( $term );
-                    $parent_id = $last_term_id;
+                if ( $term_id ) {
+                    $last_term_id = $term_id;
+                    $parent_id = $term_id; // Next category will be child of this one.
                 }
             }
-            
+
             if ( $last_term_id ) {
-                $term_ids[] = $last_term_id; // Dodajemy tylko ostatni segment ścieżki
+                $term_ids[] = $last_term_id; // Add only the last (deepest) category in path.
             }
         }
 
         if ( ! empty( $term_ids ) ) {
             wp_set_object_terms( $product_id, array_unique( $term_ids ), 'product_cat' );
         }
+    }
+
+    /**
+     * Get or create a category term with proper parent handling.
+     *
+     * This function properly checks for existing categories by name AND parent,
+     * which term_exists() doesn't always do reliably.
+     *
+     * @param string $name       Category name.
+     * @param int    $parent_id  Parent category ID (0 for top-level).
+     * @return int|false         Term ID on success, false on failure.
+     */
+    private function get_or_create_category( $name, $parent_id = 0 ) {
+        global $wpdb;
+
+        // Find existing term by name and parent.
+        $term = $wpdb->get_row( $wpdb->prepare(
+            "SELECT t.term_id, tt.parent
+             FROM {$wpdb->terms} t
+             INNER JOIN {$wpdb->term_taxonomy} tt ON t.term_id = tt.term_id
+             WHERE t.name = %s
+             AND tt.taxonomy = 'product_cat'
+             AND tt.parent = %d
+             LIMIT 1",
+            $name,
+            $parent_id
+        ) );
+
+        if ( $term ) {
+            return intval( $term->term_id );
+        }
+
+        // Term doesn't exist, create it.
+        $result = wp_insert_term( $name, 'product_cat', array( 'parent' => $parent_id ) );
+
+        if ( is_wp_error( $result ) ) {
+            Rolmar_Logger::warning( "Failed to create category '{$name}' (parent: {$parent_id}): " . $result->get_error_message(), 'import' );
+            return false;
+        }
+
+        return isset( $result['term_id'] ) ? intval( $result['term_id'] ) : false;
     }
 
     /**
