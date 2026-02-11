@@ -30,6 +30,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_load_category_tree', array( $this, 'ajax_load_category_tree' ) );
         add_action( 'wp_ajax_rolmar_debug_images', array( $this, 'ajax_debug_images' ) );
         add_action( 'wp_ajax_rolmar_debug_photos_api', array( $this, 'ajax_debug_photos_api' ) );
+        add_action( 'wp_ajax_rolmar_debug_existing_products', array( $this, 'ajax_debug_existing_products' ) );
     }
 
     public function add_menu() {
@@ -364,6 +365,9 @@ class Rolmar_Admin {
                 </button>
                 <button type="button" id="rolmar-debug-photos-api" class="button button-primary">
                     <?php esc_html_e( 'Testuj getPhotos API ⭐', 'rolmar-integration' ); ?>
+                </button>
+                <button type="button" id="rolmar-debug-existing-products" class="button button-primary" style="background: #00a32a; border-color: #00a32a;">
+                    <?php esc_html_e( '🎯 Testuj TWOJE produkty', 'rolmar-integration' ); ?>
                 </button>
             </p>
             <div id="rolmar-debug-result" style="margin-top: 15px;"></div>
@@ -923,6 +927,148 @@ class Rolmar_Admin {
 
         wp_send_json_success( array(
             'total_entries' => $total_count,
+            'results' => $results
+        ) );
+    }
+
+    /**
+     * AJAX handler to test getPhotos for existing WooCommerce products.
+     */
+    public function ajax_debug_existing_products() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnień.' ) );
+        }
+
+        // Get first 15 WooCommerce products with SKUs.
+        $args = array(
+            'limit' => 15,
+            'status' => 'publish',
+            'orderby' => 'date',
+            'order' => 'DESC',
+        );
+
+        $wc_products = wc_get_products( $args );
+
+        if ( empty( $wc_products ) ) {
+            wp_send_json_error( array( 'message' => 'Brak produktów w WooCommerce.' ) );
+        }
+
+        // Get ALL photos from getPhotos API.
+        $api = new Rolmar_API_Client();
+        $all_photos = $api->get_photos();
+
+        if ( is_wp_error( $all_photos ) ) {
+            wp_send_json_error( array(
+                'message' => 'Błąd API getPhotos: ' . $all_photos->get_error_message()
+            ) );
+        }
+
+        if ( ! is_array( $all_photos ) ) {
+            wp_send_json_error( array( 'message' => 'getPhotos zwróciło nieprawidłowe dane.' ) );
+        }
+
+        // Build index: SKU/index => photos.
+        $photo_index = array();
+        foreach ( $all_photos as $item ) {
+            $identifier = null;
+            if ( isset( $item['productIndex'] ) ) {
+                $identifier = $item['productIndex'];
+            } elseif ( isset( $item['index'] ) ) {
+                $identifier = $item['index'];
+            } elseif ( isset( $item['sku'] ) ) {
+                $identifier = $item['sku'];
+            }
+
+            if ( $identifier ) {
+                // Extract photos.
+                $photo_urls = array();
+                if ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+                    $photo_urls = $item['photos'];
+                } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
+                    $photo_urls = $item['images'];
+                } elseif ( isset( $item['photo'] ) ) {
+                    $photo_urls = array( $item['photo'] );
+                } elseif ( isset( $item['image'] ) ) {
+                    $photo_urls = array( $item['image'] );
+                }
+
+                $photo_index[ $identifier ] = array(
+                    'urls' => $photo_urls,
+                    'raw' => $item,
+                );
+            }
+        }
+
+        // Check each WooCommerce product.
+        $results = array();
+        foreach ( $wc_products as $product ) {
+            $sku = $product->get_sku();
+            $product_id = $product->get_id();
+            $product_name = $product->get_name();
+
+            if ( empty( $sku ) ) {
+                $results[] = array(
+                    'product_id' => $product_id,
+                    'product_name' => $product_name,
+                    'sku' => 'BRAK SKU',
+                    'api_status' => '⚠️ Brak SKU',
+                    'photo_count' => 0,
+                    'photo_urls' => array(),
+                    'first_photo_status' => 'N/A',
+                    'first_photo_http' => 0,
+                    'has_wc_image' => $product->get_image_id() ? 'TAK ✅' : 'NIE ❌',
+                );
+                continue;
+            }
+
+            // Check if getPhotos has this SKU.
+            $api_status = 'NIE ZNALEZIONO ❌';
+            $photo_urls = array();
+            $first_photo_status = 'N/A';
+            $first_photo_http = 0;
+
+            if ( isset( $photo_index[ $sku ] ) ) {
+                $photo_data = $photo_index[ $sku ];
+                $photo_urls = $photo_data['urls'];
+
+                if ( empty( $photo_urls ) ) {
+                    $api_status = 'Znaleziono, ale BRAK ZDJĘĆ 🟠';
+                } else {
+                    $api_status = 'Znaleziono ✅';
+
+                    // Test first photo URL.
+                    $test_response = wp_remote_head( $photo_urls[0], array(
+                        'timeout' => 10,
+                        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    ) );
+
+                    if ( ! is_wp_error( $test_response ) ) {
+                        $first_photo_http = wp_remote_retrieve_response_code( $test_response );
+                        $first_photo_status = ( $first_photo_http === 200 ) ? 'OK ✅' : 'FAIL ❌';
+                    } else {
+                        $first_photo_status = 'ERROR: ' . $test_response->get_error_message();
+                    }
+                }
+            }
+
+            $results[] = array(
+                'product_id' => $product_id,
+                'product_name' => $product_name,
+                'sku' => $sku,
+                'api_status' => $api_status,
+                'photo_count' => count( $photo_urls ),
+                'photo_urls' => $photo_urls,
+                'first_photo_status' => $first_photo_status,
+                'first_photo_http' => $first_photo_http,
+                'has_wc_image' => $product->get_image_id() ? 'TAK ✅' : 'NIE ❌',
+            );
+        }
+
+        wp_send_json_success( array(
+            'total_api_photos' => count( $all_photos ),
+            'total_wc_products' => count( $wc_products ),
             'results' => $results
         ) );
     }

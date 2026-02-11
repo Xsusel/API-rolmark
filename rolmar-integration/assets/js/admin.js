@@ -539,6 +539,114 @@
         });
     });
 
+    // Debug Existing Products Button
+    $('#rolmar-debug-existing-products').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-debug-result');
+
+        $btn.prop('disabled', true).text('⏳ Sprawdzanie...');
+        $result.html('<p>Pobieranie Twoich produktów i sprawdzanie getPhotos API...</p>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_debug_existing_products',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('🎯 Testuj TWOJE produkty');
+
+            if (response.success && response.data.results) {
+                var totalApiPhotos = response.data.total_api_photos || 0;
+                var totalWcProducts = response.data.total_wc_products || 0;
+                var html = '<div class="notice notice-success" style="padding: 10px;">';
+                html += '<p><strong>✅ Sprawdzono ' + totalWcProducts + ' produktów z Twojego sklepu vs ' + totalApiPhotos + ' wpisów w getPhotos</strong></p>';
+                html += '<table class="widefat striped" style="margin-top: 10px; font-size: 12px;">';
+                html += '<thead><tr>';
+                html += '<th style="width: 60px;">ID</th>';
+                html += '<th>Nazwa produktu</th>';
+                html += '<th style="width: 120px;">SKU</th>';
+                html += '<th style="width: 150px;">Status w getPhotos</th>';
+                html += '<th style="width: 60px;">Ilość foto</th>';
+                html += '<th>Pierwsze zdjęcie</th>';
+                html += '<th style="width: 80px;">HTTP Test</th>';
+                html += '<th style="width: 100px;">Ma obrazek w WC?</th>';
+                html += '</tr></thead><tbody>';
+
+                var foundWithPhotos = 0;
+                var foundNoPhotos = 0;
+                var notFoundInApi = 0;
+
+                response.data.results.forEach(function (item) {
+                    var apiColor = 'red';
+                    if (item.api_status.includes('Znaleziono ✅')) {
+                        apiColor = 'green';
+                        foundWithPhotos++;
+                    } else if (item.api_status.includes('BRAK ZDJĘĆ')) {
+                        apiColor = 'orange';
+                        foundNoPhotos++;
+                    } else {
+                        notFoundInApi++;
+                    }
+
+                    var photoStatusColor = item.first_photo_status.includes('OK') ? 'green' : (item.first_photo_status === 'N/A' ? 'gray' : 'red');
+                    var wcImageColor = item.has_wc_image.includes('TAK') ? 'green' : 'red';
+                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? item.photo_urls[0] : '<em>brak</em>';
+
+                    html += '<tr>';
+                    html += '<td><strong>' + item.product_id + '</strong></td>';
+                    html += '<td style="font-size: 11px;">' + item.product_name + '</td>';
+                    html += '<td><code>' + item.sku + '</code></td>';
+                    html += '<td style="color: ' + apiColor + '; font-weight: bold;">' + item.api_status + '</td>';
+                    html += '<td style="text-align: center;"><strong>' + item.photo_count + '</strong></td>';
+                    html += '<td style="font-size: 10px; word-break: break-all; max-width: 300px;">' + firstPhotoUrl;
+
+                    // Show all photo URLs in expandable section.
+                    if (item.photo_urls && item.photo_urls.length > 1) {
+                        html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Wszystkie (' + item.photo_urls.length + ')</summary>';
+                        html += '<ol style="margin:5px 0;padding-left:20px;font-size:9px;">';
+                        item.photo_urls.forEach(function(url) {
+                            html += '<li style="word-break:break-all;">' + url + '</li>';
+                        });
+                        html += '</ol></details>';
+                    }
+                    html += '</td>';
+
+                    html += '<td style="text-align: center; color: ' + photoStatusColor + '; font-weight: bold;">';
+                    html += item.first_photo_http ? item.first_photo_http + '<br>' : '';
+                    html += item.first_photo_status + '</td>';
+                    html += '<td style="color: ' + wcImageColor + '; font-weight: bold; text-align: center;">' + item.has_wc_image + '</td>';
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+
+                // Summary statistics.
+                html += '<div style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-left: 4px solid #2271b1;">';
+                html += '<p style="margin: 5px 0;"><strong>📊 Podsumowanie:</strong></p>';
+                html += '<ul style="margin: 5px 0; padding-left: 20px;">';
+                html += '<li><span style="color: green;">✅ Znalezione w getPhotos ze zdjęciami: <strong>' + foundWithPhotos + '</strong></span></li>';
+                html += '<li><span style="color: orange;">🟠 Znalezione w getPhotos BEZ zdjęć: <strong>' + foundNoPhotos + '</strong></span></li>';
+                html += '<li><span style="color: red;">❌ NIE znalezione w getPhotos: <strong>' + notFoundInApi + '</strong></span></li>';
+                html += '</ul></div>';
+
+                // Diagnosis.
+                if (foundWithPhotos > 0) {
+                    html += '<p style="margin-top: 15px; padding: 10px; background: #d4edda; border-left: 4px solid #28a745; color: #155724;"><strong>🎉 SUKCES!</strong> getPhotos ma zdjęcia dla Twoich produktów! Jeśli sync_photos nie działa, to problem jest w kodzie sync_photos() - naprawię to.</p>';
+                } else if (foundNoPhotos > 0) {
+                    html += '<p style="margin-top: 15px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; color: #856404;"><strong>⚠️ PROBLEM:</strong> Twoje produkty są w getPhotos, ale NIE MAJĄ zdjęć. Skontaktuj się z Rolmar - ich API nie zwraca obrazków dla tych SKU.</p>';
+                } else {
+                    html += '<p style="margin-top: 15px; padding: 10px; background: #f8d7da; border-left: 4px solid #dc3545; color: #721c24;"><strong>❌ PROBLEM:</strong> Żaden z Twoich produktów nie jest w getPhotos! Problem z dopasowaniem SKU lub getPhotos nie ma danych dla Twoich kategorii.</p>';
+                }
+
+                html += '</div>';
+                $result.html(html);
+            } else {
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false).text('🎯 Testuj TWOJE produkty');
+            $result.html('<div class="notice notice-error"><p>Błąd połączenia z serwerem.</p></div>');
+        });
+    });
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {
