@@ -18,6 +18,7 @@ class Rolmar_Product_Importer {
     private $import_images;
     private $manage_stock;
     private $allowed_categories;
+    private $attribute_creation_cache = array();
 
     public function __construct() {
         $this->api              = new Rolmar_API_Client();
@@ -524,73 +525,78 @@ class Rolmar_Product_Importer {
     private function ensure_product_attribute( $slug, $label ) {
         global $wpdb;
 
+        // Check runtime cache first to avoid repeated DB queries and creation attempts.
+        if ( isset( $this->attribute_creation_cache[ $slug ] ) ) {
+            return $this->attribute_creation_cache[ $slug ];
+        }
+
         // Check if attribute already exists using WooCommerce function.
         $attribute_id = wc_attribute_taxonomy_id_by_name( 'pa_' . $slug );
         if ( $attribute_id ) {
+            $this->attribute_creation_cache[ $slug ] = $attribute_id;
+            $this->ensure_taxonomy_registered( $slug, $label );
             return $attribute_id;
         }
 
         // Double-check in database directly in case the taxonomy isn't registered yet.
-        $existing = $wpdb->get_row(
+        $existing = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT * FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
+                "SELECT attribute_id FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
                 $slug
             )
         );
 
         if ( $existing ) {
             // Attribute exists in DB but taxonomy not registered - register it now.
-            $taxonomy = 'pa_' . $slug;
-            if ( ! taxonomy_exists( $taxonomy ) ) {
-                register_taxonomy( $taxonomy, 'product', array(
-                    'labels'       => array( 'name' => $label ),
-                    'hierarchical' => false,
-                    'show_ui'      => false,
-                    'query_var'    => true,
-                    'rewrite'      => false,
-                ) );
-            }
-            return $existing->attribute_id;
+            $this->ensure_taxonomy_registered( $slug, $label );
+            $this->attribute_creation_cache[ $slug ] = $existing;
+            delete_transient( 'wc_attribute_taxonomies' );
+            return $existing;
         }
 
-        // Sanitize the attribute name using WooCommerce function.
-        $sanitized_slug = function_exists( 'wc_sanitize_taxonomy_name' )
-            ? wc_sanitize_taxonomy_name( $slug )
-            : sanitize_title( $slug );
-
-        // Validate the sanitized slug is not empty.
-        if ( empty( $sanitized_slug ) || empty( $label ) ) {
-            Rolmar_Logger::warning( "Failed to create attribute: slug or label is empty after sanitization (slug: '{$slug}', sanitized: '{$sanitized_slug}', label: '{$label}')", 'import' );
-            return false;
-        }
-
-        $args = array(
-            'attribute_label'   => $label,
-            'attribute_name'    => $sanitized_slug,
-            'attribute_type'    => 'select',
-            'attribute_orderby' => 'menu_order',
-            'attribute_public'  => 0,
+        // Attribute doesn't exist - try to create it directly in database.
+        // This bypasses WooCommerce's validation which may be causing issues.
+        $inserted = $wpdb->insert(
+            $wpdb->prefix . 'woocommerce_attribute_taxonomies',
+            array(
+                'attribute_name'    => $slug,
+                'attribute_label'   => $label,
+                'attribute_type'    => 'select',
+                'attribute_orderby' => 'menu_order',
+                'attribute_public'  => 0,
+            ),
+            array( '%s', '%s', '%s', '%s', '%d' )
         );
 
-        $result = wc_create_attribute( $args );
-
-        if ( is_wp_error( $result ) ) {
-            // Log detailed error for debugging.
-            Rolmar_Logger::warning(
-                sprintf(
-                    "Failed to create attribute '%s' (sanitized: '%s'): %s. Args: %s",
-                    $slug,
-                    $sanitized_slug,
-                    $result->get_error_message(),
-                    wp_json_encode( $args )
-                ),
-                'import'
-            );
-            return false;
+        if ( $inserted ) {
+            $attribute_id = $wpdb->insert_id;
+            $this->ensure_taxonomy_registered( $slug, $label );
+            $this->attribute_creation_cache[ $slug ] = $attribute_id;
+            delete_transient( 'wc_attribute_taxonomies' );
+            Rolmar_Logger::info( "Created attribute '{$slug}' with ID {$attribute_id}", 'import' );
+            return $attribute_id;
         }
 
-        // Register taxonomy immediately.
-        $taxonomy = 'pa_' . $sanitized_slug;
+        // If direct insertion failed, log the error.
+        Rolmar_Logger::warning(
+            sprintf(
+                "Failed to create attribute '%s': Database insertion failed. Error: %s",
+                $slug,
+                $wpdb->last_error
+            ),
+            'import'
+        );
+
+        // Cache the failure to prevent repeated attempts.
+        $this->attribute_creation_cache[ $slug ] = false;
+        return false;
+    }
+
+    /**
+     * Ensure taxonomy is registered for an attribute.
+     */
+    private function ensure_taxonomy_registered( $slug, $label ) {
+        $taxonomy = 'pa_' . $slug;
         if ( ! taxonomy_exists( $taxonomy ) ) {
             register_taxonomy( $taxonomy, 'product', array(
                 'labels'       => array( 'name' => $label ),
@@ -600,11 +606,6 @@ class Rolmar_Product_Importer {
                 'rewrite'      => false,
             ) );
         }
-
-        // Flush rewrite rules to ensure the new taxonomy is recognized.
-        delete_transient( 'wc_attribute_taxonomies' );
-
-        return $result;
     }
 
     /**

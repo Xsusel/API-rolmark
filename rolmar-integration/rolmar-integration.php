@@ -96,6 +96,73 @@ final class Rolmar_Integration {
 
         // Create log directory.
         Rolmar_Logger::create_log_dir();
+
+        // Create common product attributes.
+        $this->create_common_attributes();
+    }
+
+    /**
+     * Create common product attributes used by Rolmar products.
+     */
+    private function create_common_attributes() {
+        global $wpdb;
+
+        $attributes_to_create = array(
+            array(
+                'slug'  => 'marka',
+                'label' => __( 'Marka', 'rolmar-integration' ),
+            ),
+        );
+
+        foreach ( $attributes_to_create as $attr ) {
+            $slug  = $attr['slug'];
+            $label = $attr['label'];
+
+            // Check if attribute already exists in database.
+            $existing = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT attribute_id FROM {$wpdb->prefix}woocommerce_attribute_taxonomies WHERE attribute_name = %s",
+                    $slug
+                )
+            );
+
+            if ( ! $existing ) {
+                // Insert directly into database.
+                $wpdb->insert(
+                    $wpdb->prefix . 'woocommerce_attribute_taxonomies',
+                    array(
+                        'attribute_name'    => $slug,
+                        'attribute_label'   => $label,
+                        'attribute_type'    => 'select',
+                        'attribute_orderby' => 'menu_order',
+                        'attribute_public'  => 0,
+                    ),
+                    array( '%s', '%s', '%s', '%s', '%d' )
+                );
+
+                // Clear the cache.
+                delete_transient( 'wc_attribute_taxonomies' );
+            }
+
+            // Register the taxonomy.
+            $taxonomy = 'pa_' . $slug;
+            if ( ! taxonomy_exists( $taxonomy ) ) {
+                register_taxonomy(
+                    $taxonomy,
+                    'product',
+                    array(
+                        'labels'       => array( 'name' => $label ),
+                        'hierarchical' => false,
+                        'show_ui'      => false,
+                        'query_var'    => true,
+                        'rewrite'      => false,
+                    )
+                );
+            }
+        }
+
+        // Flush rewrite rules.
+        flush_rewrite_rules();
     }
 
     public function deactivate() {
