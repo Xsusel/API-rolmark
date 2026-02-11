@@ -568,6 +568,7 @@
                 html += '<th>Pierwsze zdjęcie</th>';
                 html += '<th style="width: 80px;">HTTP Test</th>';
                 html += '<th style="width: 100px;">Ma obrazek w WC?</th>';
+                html += '<th style="width: 150px;">🔍 RAW API Data</th>';
                 html += '</tr></thead><tbody>';
 
                 var foundWithPhotos = 0;
@@ -613,6 +614,20 @@
                     html += item.first_photo_http ? item.first_photo_http + '<br>' : '';
                     html += item.first_photo_status + '</td>';
                     html += '<td style="color: ' + wcImageColor + '; font-weight: bold; text-align: center;">' + item.has_wc_image + '</td>';
+
+                    // RAW API Data column
+                    html += '<td style="font-size: 10px;">';
+                    if (item.api_status.includes('Znaleziono')) {
+                        // Get the raw data from photo_index (we need to add this to the response)
+                        html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-weight:bold;color:#2271b1;">📋 Pokaż RAW JSON</summary>';
+                        html += '<pre style="margin:5px 0;padding:10px;background:#f5f5f5;border:1px solid #ddd;overflow:auto;max-height:300px;font-size:9px;font-family:monospace;">';
+                        html += JSON.stringify(item.raw_api_data || {}, null, 2);
+                        html += '</pre></details>';
+                    } else {
+                        html += '<em style="color:#999;">Brak w API</em>';
+                    }
+                    html += '</td>';
+
                     html += '</tr>';
                 });
 

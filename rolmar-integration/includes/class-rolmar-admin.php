@@ -1063,6 +1063,7 @@ class Rolmar_Admin {
                 'first_photo_status' => $first_photo_status,
                 'first_photo_http' => $first_photo_http,
                 'has_wc_image' => $product->get_image_id() ? 'TAK ✅' : 'NIE ❌',
+                'raw_api_data' => isset( $photo_index[ $sku ] ) ? $photo_index[ $sku ]['raw'] : null,
             );
         }
 
