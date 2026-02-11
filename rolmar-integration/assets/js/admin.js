@@ -462,6 +462,83 @@
         });
     });
 
+    // Debug getPhotos API Button
+    $('#rolmar-debug-photos-api').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-debug-result');
+
+        $btn.prop('disabled', true).text('Testowanie getPhotos...');
+        $result.html('<p>Pobieranie danych z getPhotos API...</p>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_debug_photos_api',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('Testuj getPhotos API ⭐');
+
+            if (response.success && response.data.results) {
+                var total = response.data.total_entries || 0;
+                var html = '<div class="notice notice-success" style="padding: 10px;">';
+                html += '<p><strong>✅ getPhotos API działa! Znaleziono ' + total + ' wpisów. Pokazuję pierwsze 5:</strong></p>';
+                html += '<table class="widefat striped" style="margin-top: 10px; font-size: 12px;">';
+                html += '<thead><tr>';
+                html += '<th style="width: 100px;">SKU/Index</th>';
+                html += '<th style="width: 80px;">Ilość zdjęć</th>';
+                html += '<th>Pierwsze zdjęcie (URL)</th>';
+                html += '<th style="width: 80px;">Test HTTP</th>';
+                html += '<th style="width: 150px;">Produkt w WooCommerce</th>';
+                html += '</tr></thead><tbody>';
+
+                response.data.results.forEach(function (item) {
+                    var statusColor = item.first_photo_status.includes('OK') ? 'green' : (item.first_photo_status.includes('BRAK') ? 'orange' : 'red');
+                    var wcColor = item.wc_product_id ? 'green' : 'red';
+                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? item.photo_urls[0] : '<em>brak</em>';
+
+                    html += '<tr>';
+                    html += '<td><code>' + item.identifier + '</code></td>';
+                    html += '<td style="text-align: center;"><strong>' + item.photo_count + '</strong></td>';
+                    html += '<td style="font-size: 10px; word-break: break-all; max-width: 400px;">' + firstPhotoUrl;
+
+                    // Show all photo URLs in expandable section.
+                    if (item.photo_urls && item.photo_urls.length > 1) {
+                        html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Wszystkie zdjęcia (' + item.photo_urls.length + ')</summary>';
+                        html += '<ol style="margin:5px 0;padding-left:20px;font-size:9px;">';
+                        item.photo_urls.forEach(function(url) {
+                            html += '<li style="word-break:break-all;">' + url + '</li>';
+                        });
+                        html += '</ol></details>';
+                    }
+                    html += '</td>';
+
+                    html += '<td style="text-align: center; color: ' + statusColor + '; font-weight: bold;">';
+                    html += item.first_photo_http ? item.first_photo_http + '<br>' : '';
+                    html += item.first_photo_status + '</td>';
+                    html += '<td style="color: ' + wcColor + '; font-size: 11px;">' + item.wc_status + '</td>';
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                html += '<p style="margin-top: 15px;"><strong>Legenda:</strong> ';
+                html += '<span style="color: green;">●</span> OK = obrazek istnieje (200) | ';
+                html += '<span style="color: red;">●</span> FAIL = 404 lub błąd | ';
+                html += '<span style="color: orange;">●</span> BRAK = brak URL';
+                html += '</p>';
+
+                if (response.data.results.some(function(r) { return !r.wc_product_id; })) {
+                    html += '<p style="color: red; font-weight: bold;">⚠️ UWAGA: Niektóre produkty z getPhotos NIE ISTNIEJĄ w WooCommerce! Najpierw uruchom "Importuj produkty".</p>';
+                }
+
+                html += '</div>';
+                $result.html(html);
+            } else {
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false).text('Testuj getPhotos API ⭐');
+            $result.html('<div class="notice notice-error"><p>Błąd połączenia z serwerem.</p></div>');
+        });
+    });
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {
