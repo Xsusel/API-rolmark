@@ -400,7 +400,7 @@ class Rolmar_Product_Importer {
         $term_ids = array();
 
         foreach ( $categories as $category_path ) {
-            $parts     = array_map( 'trim', explode( '>', $category_path ) );
+            $parts     = array_map( 'trim', explode( '/', $category_path ) );
             $parent_id = 0;
             $last_term_id = 0;
 
