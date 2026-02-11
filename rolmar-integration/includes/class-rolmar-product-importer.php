@@ -156,6 +156,12 @@ class Rolmar_Product_Importer {
             $errors
         );
         Rolmar_Logger::info( $message, 'import' );
+
+        // Remind user to sync photos separately.
+        if ( $this->import_images && ( $created > 0 || $updated > 0 ) ) {
+            Rolmar_Logger::info( 'UWAGA: Zdjęcia produktów NIE są pobierane podczas importu. Kliknij "Synchronizuj zdjęcia" aby pobrać obrazki z API getPhotos.', 'import' );
+        }
+
         $this->update_progress( 'done', $message, $total, $total, $created, $updated, $errors );
 
         update_option( 'rolmar_last_product_sync', current_time( 'mysql' ) );
@@ -278,16 +284,20 @@ class Rolmar_Product_Importer {
             $this->set_product_categories( $product_id, $data['categories'] );
         }
 
-        // Main photo (only on creation or if no image exists).
-        if ( $this->import_images && ! empty( $data['mainPhoto'] ) ) {
-            // Debug: Log first few raw mainPhoto values to understand API response format.
-            static $debug_count = 0;
-            if ( $debug_count < 3 ) {
-                Rolmar_Logger::info( "DEBUG RAW mainPhoto for {$sku}: " . print_r( $data['mainPhoto'], true ), 'import' );
-                $debug_count++;
-            }
-            $this->maybe_set_product_image( $product_id, $data['mainPhoto'], $sku );
-        }
+        // IMPORTANT: Do NOT use mainPhoto field from getProducts API.
+        // The mainPhoto URLs are often broken/outdated (404 errors).
+        // Instead, use the separate "Synchronizuj zdjęcia" button which calls
+        // getPhotos API to get correct photo URLs.
+        //
+        // Photos should be synced separately via sync_photos() method which:
+        // 1. Calls getPhotos API endpoint (returns correct URLs)
+        // 2. Downloads photos for products without images
+        // 3. Sets featured image + gallery images
+        //
+        // Commented out broken mainPhoto download:
+        // if ( $this->import_images && ! empty( $data['mainPhoto'] ) ) {
+        //     $this->maybe_set_product_image( $product_id, $data['mainPhoto'], $sku );
+        // }
 
         return $is_new ? 'created' : 'updated';
     }
@@ -876,6 +886,7 @@ class Rolmar_Product_Importer {
         }
 
         Rolmar_Logger::info( 'Starting photo sync...', 'import' );
+        Rolmar_Logger::info( 'Fetching photo URLs from getPhotos API endpoint...', 'import' );
 
         $photos = $this->api->get_photos();
 
@@ -891,7 +902,12 @@ class Rolmar_Product_Importer {
             return;
         }
 
+        $total_photos = count( $photos );
+        Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Processing...", 'import' );
+
         $updated = 0;
+        $skipped = 0;
+        $errors = 0;
 
         foreach ( $photos as $item ) {
             $sku = '';
@@ -913,16 +929,20 @@ class Rolmar_Product_Importer {
             }
 
             if ( empty( $sku ) || empty( $photo_urls ) ) {
+                $skipped++;
                 continue;
             }
 
             $product_id = wc_get_product_id_by_sku( $sku );
             if ( ! $product_id ) {
+                Rolmar_Logger::warning( "Photo sync: Product with SKU '{$sku}' not found in WooCommerce. Skipping.", 'import' );
+                $skipped++;
                 continue;
             }
 
             $product = wc_get_product( $product_id );
             if ( ! $product ) {
+                $errors++;
                 continue;
             }
 
@@ -955,7 +975,18 @@ class Rolmar_Product_Importer {
             $updated++;
         }
 
-        Rolmar_Logger::info( "Photo sync done. Updated: {$updated} products.", 'import' );
+        $message = sprintf(
+            'Photo sync complete. Total entries: %d, Updated: %d, Skipped: %d, Errors: %d',
+            $total_photos,
+            $updated,
+            $skipped,
+            $errors
+        );
+        Rolmar_Logger::info( $message, 'import' );
+
+        if ( $updated === 0 ) {
+            Rolmar_Logger::warning( 'No products were updated with photos. Possible reasons: products already have images, or SKUs do not match between API and WooCommerce.', 'import' );
+        }
 
         update_option( 'rolmar_last_photo_sync', current_time( 'mysql' ) );
         delete_transient( 'rolmar_sync_in_progress' );
