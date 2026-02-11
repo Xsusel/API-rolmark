@@ -920,7 +920,11 @@ class Rolmar_Product_Importer {
                 $sku = $item['index'];
             }
 
-            if ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+            // Extract photo URLs - API returns 'url' field with single URL.
+            if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                // getPhotos returns single 'url' field
+                $photo_urls = array( $item['url'] );
+            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                 $photo_urls = $item['photos'];
             } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
                 $photo_urls = $item['images'];
