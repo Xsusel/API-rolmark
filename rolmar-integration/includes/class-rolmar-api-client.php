@@ -170,6 +170,12 @@ class Rolmar_API_Client {
             return new WP_Error( 'rolmar_http_error', $error_msg );
         }
 
+        // DEBUG: Log first 5000 chars of raw response for getPhotos
+        if ( 'getPhotos' === $method ) {
+            $preview = substr( $raw_body, 0, 5000 );
+            Rolmar_Logger::info( "DEBUG getPhotos RAW Response (first 5000 chars): {$preview}", 'api' );
+        }
+
         $data = json_decode( $raw_body, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
