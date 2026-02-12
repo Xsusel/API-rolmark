@@ -139,14 +139,10 @@ class Rolmar_API_Client {
             'lang' => $this->language,
         ) );
 
-// Budowa body zgodnie z dokumentacją API Rolmar
+// Budowa body - płaska struktura z wsKey i param
         $body = wp_json_encode( array(
             'wsKey' => $this->api_key,
-            'data'  => array(
-                array(
-                    'param' => ! empty( $params ) ? $params : array(),
-                ),
-            ),
+            'param' => ! empty( $params ) ? $params : array(),
         ) );
 
         Rolmar_Logger::info( "API Request: {$method} -> {$url}", 'api' );
