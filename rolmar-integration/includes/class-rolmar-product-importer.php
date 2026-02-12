@@ -560,8 +560,14 @@ class Rolmar_Product_Importer {
         // Remove trailing dots and spaces.
         $url = rtrim( $url, '. ' );
 
-        // Fix malformed query parameters (e.g., "?c=-bth.." -> remove the parameter entirely).
-        $url = preg_replace( '/\?c=-[^&]*$/', '', $url );
+        // Remove malformed 'c' query parameter (e.g., "&c=-bth.." or "?c=-bth..").
+        $url = preg_replace( '/[?&]c=-[^&]*/', '', $url );
+
+        // If removing the parameter left a bare '?' or trailing '&', clean up.
+        $url = rtrim( $url, '?&' );
+
+        // If the first remaining parameter now starts with '&', replace with '?'.
+        $url = preg_replace( '/\?&/', '?', $url );
 
         if ( $original_url !== $url ) {
             Rolmar_Logger::info( "Cleaned malformed URL for {$sku}: {$original_url} -> {$url}", 'import' );

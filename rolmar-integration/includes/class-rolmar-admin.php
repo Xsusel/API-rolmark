@@ -903,6 +903,9 @@ class Rolmar_Admin {
             $product_id = wc_get_product_id_by_sku( $identifier );
             $wc_status = $product_id ? 'Znaleziony (ID: ' . $product_id . ')' : 'NIE ZNALEZIONY';
 
+            // Clean photo URLs before testing (same logic as sync).
+            $photo_urls = array_map( array( $this, 'clean_photo_url' ), $photo_urls );
+
             // Test first photo URL if available.
             $first_photo_status = 'N/A';
             $first_photo_http = 0;
@@ -1049,6 +1052,9 @@ class Rolmar_Admin {
                 $photo_data = $photo_index[ $sku ];
                 $photo_urls = $photo_data['urls'];
 
+                // Clean URLs before testing.
+                $photo_urls = array_map( array( $this, 'clean_photo_url' ), $photo_urls );
+
                 if ( empty( $photo_urls ) ) {
                     $api_status = 'Znaleziono, ale BRAK ZDJĘĆ 🟠';
                 } else {
@@ -1088,5 +1094,25 @@ class Rolmar_Admin {
             'total_wc_products' => count( $wc_products ),
             'results' => $results
         ) );
+    }
+
+    /**
+     * Clean malformed photo URL from the API.
+     *
+     * @param string $url Raw URL from API.
+     * @return string Cleaned URL.
+     */
+    private function clean_photo_url( $url ) {
+        // Remove trailing dots and spaces.
+        $url = rtrim( $url, '. ' );
+
+        // Remove malformed 'c' query parameter (e.g., "&c=-bth.." or "?c=-bth..").
+        $url = preg_replace( '/[?&]c=-[^&]*/', '', $url );
+
+        // Clean up leftover '?' or '&'.
+        $url = rtrim( $url, '?&' );
+        $url = preg_replace( '/\?&/', '?', $url );
+
+        return $url;
     }
 }
