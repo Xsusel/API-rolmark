@@ -887,114 +887,69 @@ class Rolmar_Admin {
             wp_send_json_error( array( 'message' => 'getPhotos zwróciło nieprawidłowe dane (nie array).' ) );
         }
 
-        // Take first 5 entries.
+        // Group photos by product index (API returns 1 entry per photo).
         $total_count = count( $photos );
-        $photos_sample = array_slice( $photos, 0, 5 );
+        $grouped = array();
+        foreach ( $photos as $item ) {
+            $sku = isset( $item['index'] ) ? $item['index'] : ( isset( $item['Index'] ) ? $item['Index'] : '' );
+            $url = isset( $item['url'] ) ? $item['url'] : '';
+            $is_main = ! empty( $item['main'] );
+            if ( empty( $sku ) || empty( $url ) ) {
+                continue;
+            }
+            if ( ! isset( $grouped[ $sku ] ) ) {
+                $grouped[ $sku ] = array( 'main' => '', 'gallery' => array() );
+            }
+            if ( $is_main && empty( $grouped[ $sku ]['main'] ) ) {
+                $grouped[ $sku ]['main'] = $url;
+            } else {
+                $grouped[ $sku ]['gallery'][] = $url;
+            }
+        }
+
+        // Take first 5 products.
+        $sample = array_slice( $grouped, 0, 5, true );
         $results = array();
+        $api_key = get_option( 'rolmar_api_key', '' );
 
-        foreach ( $photos_sample as $item ) {
-            // Extract product identifier.
-            $identifier = 'N/A';
-            if ( isset( $item['Index'] ) ) {
-                $identifier = $item['Index'];
-            } elseif ( isset( $item['productIndex'] ) ) {
-                $identifier = $item['productIndex'];
-            } elseif ( isset( $item['index'] ) ) {
-                $identifier = $item['index'];
-            } elseif ( isset( $item['sku'] ) ) {
-                $identifier = $item['sku'];
-            }
-
-            // Extract photo URLs - API returns 'Photo' array field.
-            $photo_urls = array();
-            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
-                $photo_urls = $item['Photo'];
-            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
-                $photo_urls = array( $item['Photo'] );
-            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                $photo_urls = array( $item['url'] );
-            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
-                $photo_urls = $item['photos'];
-            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
-                $photo_urls = $item['images'];
-            } elseif ( isset( $item['photo'] ) ) {
-                $photo_urls = array( $item['photo'] );
-            } elseif ( isset( $item['image'] ) ) {
-                $photo_urls = array( $item['image'] );
-            }
-
-            // Check if product exists in WooCommerce.
-            $product_id = wc_get_product_id_by_sku( $identifier );
+        foreach ( $sample as $sku => $photo_data ) {
+            $product_id = wc_get_product_id_by_sku( $sku );
             $wc_status = $product_id ? 'Znaleziony (ID: ' . $product_id . ')' : 'NIE ZNALEZIONY';
 
-            // Test first photo URL - try original (with all params) and cleaned, with auth headers.
-            $first_photo_status = 'N/A';
-            $first_photo_http = 0;
-            $tested_urls_info = array();
-
-            if ( ! empty( $photo_urls[0] ) ) {
-                $raw_url = rtrim( $photo_urls[0], '. ' );
-                $clean_url = $this->clean_photo_url( $photo_urls[0] );
-                $api_key = get_option( 'rolmar_api_key', '' );
-
-                $test_variants = array( $raw_url );
-                if ( $clean_url !== $raw_url ) {
-                    $test_variants[] = $clean_url;
+            // Test main photo URL.
+            $main_url_status = 'BRAK';
+            $main_url_http = 0;
+            if ( ! empty( $photo_data['main'] ) ) {
+                $test_url = rtrim( $photo_data['main'], '. ' );
+                $test_response = wp_remote_head( $test_url, array(
+                    'timeout' => 10,
+                    'headers' => array( 'wsKey' => $api_key, 'Referer' => 'https://www.rol-mar.com.pl/' ),
+                ) );
+                if ( ! is_wp_error( $test_response ) ) {
+                    $main_url_http = wp_remote_retrieve_response_code( $test_response );
+                    $main_url_status = ( 200 === $main_url_http ) ? 'OK' : "HTTP {$main_url_http}";
+                } else {
+                    $main_url_status = 'ERROR: ' . $test_response->get_error_message();
                 }
-
-                foreach ( $test_variants as $variant_url ) {
-                    if ( empty( $variant_url ) || ! filter_var( $variant_url, FILTER_VALIDATE_URL ) ) {
-                        continue;
-                    }
-                    // Test with auth headers.
-                    $test_response = wp_remote_head( $variant_url, array(
-                        'timeout' => 10,
-                        'headers' => array(
-                            'wsKey'   => $api_key,
-                            'Referer' => 'https://www.rol-mar.com.pl/',
-                        ),
-                    ) );
-                    $variant_http = 0;
-                    $variant_status = 'ERROR';
-                    if ( ! is_wp_error( $test_response ) ) {
-                        $variant_http = wp_remote_retrieve_response_code( $test_response );
-                        $variant_status = ( 200 === $variant_http ) ? 'OK' : "HTTP {$variant_http}";
-                    } else {
-                        $variant_status = 'ERROR: ' . $test_response->get_error_message();
-                    }
-                    $tested_urls_info[] = array(
-                        'url' => $variant_url,
-                        'status' => $variant_status,
-                        'http' => $variant_http,
-                    );
-                    if ( 200 === $variant_http ) {
-                        $first_photo_http = $variant_http;
-                        $first_photo_status = 'OK';
-                        break;
-                    }
-                    $first_photo_http = $variant_http;
-                    $first_photo_status = $variant_status;
-                }
-            } else {
-                $first_photo_status = 'BRAK URL';
             }
 
             $results[] = array(
-                'identifier' => $identifier,
-                'photo_count' => count( $photo_urls ),
-                'photo_urls' => $photo_urls,
-                'wc_status' => $wc_status,
-                'wc_product_id' => $product_id,
-                'first_photo_status' => $first_photo_status,
-                'first_photo_http' => $first_photo_http,
-                'tested_urls' => $tested_urls_info,
-                'raw_data' => $item, // Full item for debugging.
+                'identifier'       => $sku,
+                'main_photo'       => $photo_data['main'],
+                'gallery_count'    => count( $photo_data['gallery'] ),
+                'gallery_urls'     => array_slice( $photo_data['gallery'], 0, 3 ),
+                'total_photos'     => ( ! empty( $photo_data['main'] ) ? 1 : 0 ) + count( $photo_data['gallery'] ),
+                'wc_status'        => $wc_status,
+                'wc_product_id'    => $product_id,
+                'main_photo_status' => $main_url_status,
+                'main_photo_http'  => $main_url_http,
             );
         }
 
         wp_send_json_success( array(
-            'total_entries' => $total_count,
-            'results' => $results
+            'total_entries'   => $total_count,
+            'unique_products' => count( $grouped ),
+            'results'         => $results,
         ) );
     }
 

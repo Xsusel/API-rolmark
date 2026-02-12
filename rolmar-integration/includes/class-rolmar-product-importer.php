@@ -866,12 +866,13 @@ class Rolmar_Product_Importer {
             }
 
             if ( empty( $sku ) ) {
+                $errors++;
                 continue;
             }
 
             $product_id = wc_get_product_id_by_sku( $sku );
             if ( ! $product_id ) {
-                continue;
+                continue; // Product not in WooCommerce - normal for items not yet imported.
             }
 
             $product = wc_get_product( $product_id );
@@ -891,7 +892,8 @@ class Rolmar_Product_Importer {
             }
         }
 
-        Rolmar_Logger::info( "Stock sync done. Updated: {$updated}, Errors: {$errors}", 'stock' );
+        $total = count( $stock_data );
+        Rolmar_Logger::info( "Stock sync done. Total: {$total}, Updated: {$updated}, Errors: {$errors}", 'stock' );
 
         update_option( 'rolmar_last_stock_sync', current_time( 'mysql' ) );
         delete_transient( 'rolmar_sync_in_progress' );
@@ -899,6 +901,9 @@ class Rolmar_Product_Importer {
 
     /**
      * Synchronize product photos from the getPhotos endpoint.
+     *
+     * API returns one entry per photo: {main:"1"|"", index:"SKU", url:"..."}
+     * We group by product index, use main=1 for featured image, rest for gallery.
      */
     public function sync_photos() {
         if ( ! $this->import_images ) {
@@ -908,7 +913,6 @@ class Rolmar_Product_Importer {
         }
 
         Rolmar_Logger::info( 'Starting photo sync...', 'import' );
-        Rolmar_Logger::info( 'Fetching photo URLs from getPhotos API endpoint...', 'import' );
 
         $photos = $this->api->get_photos();
 
@@ -925,99 +929,112 @@ class Rolmar_Product_Importer {
         }
 
         $total_photos = count( $photos );
-        Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Processing...", 'import' );
+        Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Grouping by product...", 'import' );
 
-        $updated = 0;
-        $skipped = 0;
-        $errors = 0;
-
+        // Group photos by product index. Each API entry is ONE photo.
+        // Structure: {main:"1"|"", index:"SKU", url:"https://..."}
+        $grouped = array();
         foreach ( $photos as $item ) {
             $sku = '';
-            $photo_urls = array();
-
-            // Handle various possible response structures.
-            if ( isset( $item['Index'] ) ) {
+            if ( isset( $item['index'] ) ) {
+                $sku = $item['index'];
+            } elseif ( isset( $item['Index'] ) ) {
                 $sku = $item['Index'];
             } elseif ( isset( $item['productIndex'] ) ) {
                 $sku = $item['productIndex'];
-            } elseif ( isset( $item['index'] ) ) {
-                $sku = $item['index'];
             }
 
-            // Extract photo URLs - API returns 'Photo' array field.
-            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
-                $photo_urls = $item['Photo'];
-            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
-                $photo_urls = array( $item['Photo'] );
-            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                $photo_urls = array( $item['url'] );
-            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
-                $photo_urls = $item['photos'];
-            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
-                $photo_urls = $item['images'];
-            } elseif ( isset( $item['photo'] ) ) {
-                $photo_urls = array( $item['photo'] );
-            }
+            $url = isset( $item['url'] ) ? $item['url'] : '';
+            $is_main = ! empty( $item['main'] );
 
-            if ( empty( $sku ) || empty( $photo_urls ) ) {
-                $skipped++;
+            if ( empty( $sku ) || empty( $url ) ) {
                 continue;
             }
 
+            if ( ! isset( $grouped[ $sku ] ) ) {
+                $grouped[ $sku ] = array(
+                    'main'    => '',
+                    'gallery' => array(),
+                );
+            }
+
+            if ( $is_main && empty( $grouped[ $sku ]['main'] ) ) {
+                $grouped[ $sku ]['main'] = $url;
+            } else {
+                $grouped[ $sku ]['gallery'][] = $url;
+            }
+        }
+
+        $product_count = count( $grouped );
+        Rolmar_Logger::info( "Grouped into {$product_count} unique products. Processing...", 'import' );
+
+        $updated = 0;
+        $skipped = 0;
+        $errors  = 0;
+
+        foreach ( $grouped as $sku => $photo_data ) {
             $product_id = wc_get_product_id_by_sku( $sku );
             if ( ! $product_id ) {
-                Rolmar_Logger::warning( "Photo sync: Product with SKU '{$sku}' not found in WooCommerce. Skipping.", 'import' );
                 $skipped++;
                 continue;
             }
 
             $product = wc_get_product( $product_id );
             if ( ! $product ) {
-                $errors++;
+                $skipped++;
                 continue;
             }
 
-            // Set featured image from the first photo if not set.
-            if ( ! get_post_thumbnail_id( $product_id ) && ! empty( $photo_urls[0] ) ) {
-                $image_id = $this->upload_image_from_url( $photo_urls[0], $sku . '_main' );
+            $changed = false;
+
+            // Set featured image (main photo).
+            if ( ! get_post_thumbnail_id( $product_id ) && ! empty( $photo_data['main'] ) ) {
+                $image_id = $this->upload_image_from_url( $photo_data['main'], $sku . '_main' );
                 if ( $image_id ) {
                     $product->set_image_id( $image_id );
+                    $changed = true;
                 }
             }
 
-            // Set gallery images from remaining photos.
-            if ( count( $photo_urls ) > 1 ) {
+            // Set gallery images.
+            if ( ! empty( $photo_data['gallery'] ) ) {
                 $existing_gallery = $product->get_gallery_image_ids();
                 if ( empty( $existing_gallery ) ) {
                     $gallery_ids = array();
-                    for ( $i = 1; $i < count( $photo_urls ); $i++ ) {
-                        $gallery_id = $this->upload_image_from_url( $photo_urls[ $i ], $sku . '_' . $i );
+                    foreach ( $photo_data['gallery'] as $i => $gallery_url ) {
+                        $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_' . ( $i + 1 ) );
                         if ( $gallery_id ) {
                             $gallery_ids[] = $gallery_id;
                         }
                     }
                     if ( ! empty( $gallery_ids ) ) {
                         $product->set_gallery_image_ids( $gallery_ids );
+                        $changed = true;
                     }
                 }
             }
 
-            $product->save();
-            $updated++;
+            if ( $changed ) {
+                $product->save();
+                $updated++;
+            } else {
+                $skipped++;
+            }
+
+            // Free memory periodically.
+            if ( ( $updated + $skipped + $errors ) % 100 === 0 ) {
+                wp_cache_flush();
+            }
         }
 
         $message = sprintf(
-            'Photo sync complete. Total entries: %d, Updated: %d, Skipped: %d, Errors: %d',
-            $total_photos,
+            'Photo sync complete. Products: %d, Updated: %d, Skipped: %d, Errors: %d',
+            $product_count,
             $updated,
             $skipped,
             $errors
         );
         Rolmar_Logger::info( $message, 'import' );
-
-        if ( $updated === 0 ) {
-            Rolmar_Logger::warning( 'No products were updated with photos. Possible reasons: products already have images, or SKUs do not match between API and WooCommerce.', 'import' );
-        }
 
         update_option( 'rolmar_last_photo_sync', current_time( 'mysql' ) );
         delete_transient( 'rolmar_sync_in_progress' );
