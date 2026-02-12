@@ -914,15 +914,20 @@ class Rolmar_Product_Importer {
             $photo_urls = array();
 
             // Handle various possible response structures.
-            if ( isset( $item['productIndex'] ) ) {
+            if ( isset( $item['Index'] ) ) {
+                $sku = $item['Index'];
+            } elseif ( isset( $item['productIndex'] ) ) {
                 $sku = $item['productIndex'];
             } elseif ( isset( $item['index'] ) ) {
                 $sku = $item['index'];
             }
 
-            // Extract photo URLs - API returns 'url' field with single URL.
-            if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                // getPhotos returns single 'url' field
+            // Extract photo URLs - API returns 'Photo' array field.
+            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
+                $photo_urls = $item['Photo'];
+            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $photo_urls = array( $item['Photo'] );
+            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
                 $photo_urls = array( $item['url'] );
             } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                 $photo_urls = $item['photos'];

@@ -871,7 +871,9 @@ class Rolmar_Admin {
         foreach ( $photos_sample as $item ) {
             // Extract product identifier.
             $identifier = 'N/A';
-            if ( isset( $item['productIndex'] ) ) {
+            if ( isset( $item['Index'] ) ) {
+                $identifier = $item['Index'];
+            } elseif ( isset( $item['productIndex'] ) ) {
                 $identifier = $item['productIndex'];
             } elseif ( isset( $item['index'] ) ) {
                 $identifier = $item['index'];
@@ -879,10 +881,13 @@ class Rolmar_Admin {
                 $identifier = $item['sku'];
             }
 
-            // Extract photo URLs - API returns 'url' field with single URL.
+            // Extract photo URLs - API returns 'Photo' array field.
             $photo_urls = array();
-            if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                // getPhotos returns single 'url' field
+            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
+                $photo_urls = $item['Photo'];
+            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $photo_urls = array( $item['Photo'] );
+            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
                 $photo_urls = array( $item['url'] );
             } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                 $photo_urls = $item['photos'];
@@ -976,7 +981,9 @@ class Rolmar_Admin {
         $photo_index = array();
         foreach ( $all_photos as $item ) {
             $identifier = null;
-            if ( isset( $item['productIndex'] ) ) {
+            if ( isset( $item['Index'] ) ) {
+                $identifier = $item['Index'];
+            } elseif ( isset( $item['productIndex'] ) ) {
                 $identifier = $item['productIndex'];
             } elseif ( isset( $item['index'] ) ) {
                 $identifier = $item['index'];
@@ -985,10 +992,13 @@ class Rolmar_Admin {
             }
 
             if ( $identifier ) {
-                // Extract photos - API returns 'url' field with single URL.
+                // Extract photos - API returns 'Photo' array field.
                 $photo_urls = array();
-                if ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                    // getPhotos returns single 'url' field
+                if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
+                    $photo_urls = $item['Photo'];
+                } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                    $photo_urls = array( $item['Photo'] );
+                } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
                     $photo_urls = array( $item['url'] );
                 } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
                     $photo_urls = $item['photos'];
