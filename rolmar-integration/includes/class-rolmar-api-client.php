@@ -87,10 +87,13 @@ class Rolmar_API_Client {
     /**
      * Get photo URLs for all products.
      *
+     * Uses the documented body structure for getPhotos endpoint:
+     * {"data": [{"param": []}]}
+     *
      * @return array|WP_Error
      */
     public function get_photos() {
-        return $this->request( 'photo/photo.php', 'getPhotos' );
+        return $this->request( 'photo/photo.php', 'getPhotos', array(), true );
     }
 
     /**
@@ -129,7 +132,7 @@ class Rolmar_API_Client {
      * @param array  $params    Request parameters.
      * @return array|WP_Error
      */
-    private function request( $endpoint, $method, $params = array() ) {
+    private function request( $endpoint, $method, $params = array(), $use_data_wrapper = false ) {
         if ( ! $this->is_configured() ) {
             return new WP_Error( 'rolmar_no_api_key', __( 'Klucz API Rolmar nie jest skonfigurowany.', 'rolmar-integration' ) );
         }
@@ -139,19 +142,31 @@ class Rolmar_API_Client {
             'lang' => $this->language,
         ) );
 
-// Budowa body - płaska struktura z wsKey i param
-        $body = wp_json_encode( array(
-            'wsKey' => $this->api_key,
-            'param' => ! empty( $params ) ? $params : array(),
-        ) );
+        // Build request body - getPhotos uses documented {data:[{param:[]}]} structure.
+        if ( $use_data_wrapper ) {
+            $body_array = array(
+                'data' => array(
+                    array(
+                        'param' => ! empty( $params ) ? $params : array(),
+                    ),
+                ),
+            );
+        } else {
+            $body_array = array(
+                'wsKey' => $this->api_key,
+                'param' => ! empty( $params ) ? $params : array(),
+            );
+        }
 
-        Rolmar_Logger::info( "API Request: {$method} -> {$url}", 'api' );
+        $body = wp_json_encode( $body_array );
+
+        Rolmar_Logger::info( "API Request: {$method} -> {$url} | Body: {$body}", 'api' );
 
         $response = wp_remote_post( $url, array(
             'timeout' => self::TIMEOUT,
             'headers' => array(
                 'Content-Type' => 'application/json',
-                'wsKey'        => $this->api_key, // Zmiana z 'key' na 'wsKey'
+                'wsKey'        => $this->api_key,
             ),
             'body' => $body,
         ) );
@@ -170,10 +185,10 @@ class Rolmar_API_Client {
             return new WP_Error( 'rolmar_http_error', $error_msg );
         }
 
-        // DEBUG: Log first 5000 chars of raw response for getPhotos
+        // DEBUG: Log raw response for getPhotos.
         if ( 'getPhotos' === $method ) {
             $preview = substr( $raw_body, 0, 5000 );
-            Rolmar_Logger::info( "DEBUG getPhotos RAW Response (first 5000 chars): {$preview}", 'api' );
+            Rolmar_Logger::info( "DEBUG getPhotos RAW (first 5000 chars): {$preview}", 'api' );
         }
 
         $data = json_decode( $raw_body, true );
@@ -184,12 +199,32 @@ class Rolmar_API_Client {
             return new WP_Error( 'rolmar_json_error', $error_msg );
         }
 
+        // Log top-level structure for debugging.
+        if ( 'getPhotos' === $method ) {
+            $keys = is_array( $data ) ? array_keys( $data ) : array();
+            $first_keys = is_array( $data ) && isset( $data[0] ) && is_array( $data[0] ) ? array_keys( $data[0] ) : array();
+            Rolmar_Logger::info( "DEBUG getPhotos structure: top-keys=[" . implode( ',', $keys ) . "] first-item-keys=[" . implode( ',', $first_keys ) . "]", 'api' );
+
+            // Log first entry details.
+            if ( is_array( $data ) && ! empty( $data ) ) {
+                $first = isset( $data[0]['result'][0] ) ? $data[0]['result'][0] : ( isset( $data[0] ) ? $data[0] : $data );
+                Rolmar_Logger::info( "DEBUG getPhotos first entry: " . wp_json_encode( $first ), 'api' );
+            }
+        }
+
         // The API wraps results in an array with 'result' key.
         if ( is_array( $data ) && isset( $data[0]['result'] ) ) {
             $result = $data[0]['result'];
             $count  = is_array( $result ) ? count( $result ) : 0;
-            Rolmar_Logger::info( "API Response ({$method}): {$count} records", 'api' );
+            Rolmar_Logger::info( "API Response ({$method}): {$count} records via data[0][result]", 'api' );
             return $result;
+        }
+
+        // Some endpoints may return data directly as an array of items.
+        if ( is_array( $data ) && ! empty( $data ) && ! isset( $data[0]['result'] ) ) {
+            $count = count( $data );
+            Rolmar_Logger::info( "API Response ({$method}): {$count} records (direct array, no 'result' wrapper)", 'api' );
+            return $data;
         }
 
         // Return raw data if structure is different.
