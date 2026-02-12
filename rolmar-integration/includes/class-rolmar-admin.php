@@ -797,26 +797,50 @@ class Rolmar_Admin {
                 $alt_photos[] = $product['image'];
             }
 
-            // Clean URL the same way as in the importer.
-            $original_url = $main_photo;
-            $cleaned_url = rtrim( $main_photo, '. ' );
-            $cleaned_url = preg_replace( '/\?c=-[^&]*$/', '', $cleaned_url );
+            // Prepare URL variants to test.
+            $original_url = rtrim( $main_photo, '. ' );
+            $cleaned_url = preg_replace( '/[?&]c=-[^&]*/', '', $original_url );
+            $cleaned_url = rtrim( $cleaned_url, '?&' );
+            $cleaned_url = preg_replace( '/\?&/', '?', $cleaned_url );
 
-            // Test if URL is accessible.
+            $api_key = get_option( 'rolmar_api_key', '' );
+
+            // Test URL accessibility - try original first, then cleaned, with auth headers.
             $status = 'unknown';
             $http_code = 0;
             $error_msg = '';
-            if ( ! empty( $cleaned_url ) ) {
-                $test_response = wp_remote_head( $cleaned_url, array(
-                    'timeout' => 10,
-                    'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                ) );
-                if ( ! is_wp_error( $test_response ) ) {
-                    $http_code = wp_remote_retrieve_response_code( $test_response );
-                    $status = ( $http_code === 200 ) ? 'OK' : 'FAIL';
-                } else {
-                    $status = 'ERROR';
-                    $error_msg = $test_response->get_error_message();
+            $working_url = '';
+
+            $test_urls = array( $original_url );
+            if ( $cleaned_url !== $original_url ) {
+                $test_urls[] = $cleaned_url;
+            }
+
+            if ( ! empty( $original_url ) ) {
+                foreach ( $test_urls as $test_url ) {
+                    if ( empty( $test_url ) || ! filter_var( $test_url, FILTER_VALIDATE_URL ) ) {
+                        continue;
+                    }
+                    $test_response = wp_remote_head( $test_url, array(
+                        'timeout' => 10,
+                        'headers' => array(
+                            'wsKey'   => $api_key,
+                            'Referer' => 'https://www.rol-mar.com.pl/',
+                        ),
+                    ) );
+                    if ( ! is_wp_error( $test_response ) ) {
+                        $http_code = wp_remote_retrieve_response_code( $test_response );
+                        if ( 200 === $http_code ) {
+                            $status = 'OK';
+                            $working_url = $test_url;
+                            break;
+                        }
+                        $status = 'FAIL';
+                        $error_msg = "HTTP {$http_code} for: {$test_url}";
+                    } else {
+                        $status = 'ERROR';
+                        $error_msg = $test_response->get_error_message() . " for: {$test_url}";
+                    }
                 }
             } else {
                 $status = 'EMPTY';
@@ -903,22 +927,53 @@ class Rolmar_Admin {
             $product_id = wc_get_product_id_by_sku( $identifier );
             $wc_status = $product_id ? 'Znaleziony (ID: ' . $product_id . ')' : 'NIE ZNALEZIONY';
 
-            // Clean photo URLs before testing (same logic as sync).
-            $photo_urls = array_map( array( $this, 'clean_photo_url' ), $photo_urls );
-
-            // Test first photo URL if available.
+            // Test first photo URL - try original (with all params) and cleaned, with auth headers.
             $first_photo_status = 'N/A';
             $first_photo_http = 0;
+            $tested_urls_info = array();
+
             if ( ! empty( $photo_urls[0] ) ) {
-                $test_response = wp_remote_head( $photo_urls[0], array(
-                    'timeout' => 10,
-                    'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                ) );
-                if ( ! is_wp_error( $test_response ) ) {
-                    $first_photo_http = wp_remote_retrieve_response_code( $test_response );
-                    $first_photo_status = ( $first_photo_http === 200 ) ? 'OK ✅' : 'FAIL ❌';
-                } else {
-                    $first_photo_status = 'ERROR: ' . $test_response->get_error_message();
+                $raw_url = rtrim( $photo_urls[0], '. ' );
+                $clean_url = $this->clean_photo_url( $photo_urls[0] );
+                $api_key = get_option( 'rolmar_api_key', '' );
+
+                $test_variants = array( $raw_url );
+                if ( $clean_url !== $raw_url ) {
+                    $test_variants[] = $clean_url;
+                }
+
+                foreach ( $test_variants as $variant_url ) {
+                    if ( empty( $variant_url ) || ! filter_var( $variant_url, FILTER_VALIDATE_URL ) ) {
+                        continue;
+                    }
+                    // Test with auth headers.
+                    $test_response = wp_remote_head( $variant_url, array(
+                        'timeout' => 10,
+                        'headers' => array(
+                            'wsKey'   => $api_key,
+                            'Referer' => 'https://www.rol-mar.com.pl/',
+                        ),
+                    ) );
+                    $variant_http = 0;
+                    $variant_status = 'ERROR';
+                    if ( ! is_wp_error( $test_response ) ) {
+                        $variant_http = wp_remote_retrieve_response_code( $test_response );
+                        $variant_status = ( 200 === $variant_http ) ? 'OK' : "HTTP {$variant_http}";
+                    } else {
+                        $variant_status = 'ERROR: ' . $test_response->get_error_message();
+                    }
+                    $tested_urls_info[] = array(
+                        'url' => $variant_url,
+                        'status' => $variant_status,
+                        'http' => $variant_http,
+                    );
+                    if ( 200 === $variant_http ) {
+                        $first_photo_http = $variant_http;
+                        $first_photo_status = 'OK';
+                        break;
+                    }
+                    $first_photo_http = $variant_http;
+                    $first_photo_status = $variant_status;
                 }
             } else {
                 $first_photo_status = 'BRAK URL';
@@ -932,6 +987,7 @@ class Rolmar_Admin {
                 'wc_product_id' => $product_id,
                 'first_photo_status' => $first_photo_status,
                 'first_photo_http' => $first_photo_http,
+                'tested_urls' => $tested_urls_info,
                 'raw_data' => $item, // Full item for debugging.
             );
         }
