@@ -614,9 +614,24 @@ class Rolmar_Product_Importer {
                 continue;
             }
 
+            // Convert to WebP in memory for smaller file size and faster loading.
+            $webp_body = $this->convert_to_webp( $body, $sku );
+            if ( false !== $webp_body ) {
+                $body      = $webp_body;
+                $file_ext  = 'webp';
+                $mime_type = 'image/webp';
+                unset( $webp_body ); // Free memory immediately.
+            } else {
+                // Fallback: keep original format.
+                $file_ext  = pathinfo( wp_parse_url( $try_url, PHP_URL_PATH ), PATHINFO_EXTENSION );
+                $file_ext  = $file_ext ?: 'png';
+                $mime_type = '';
+            }
+
             // Save to temp file.
             $tmp = wp_tempnam( $sku );
             file_put_contents( $tmp, $body );
+            unset( $body ); // Free memory — file is on disk now.
 
             if ( ! function_exists( 'media_handle_sideload' ) ) {
                 require_once ABSPATH . 'wp-admin/includes/media.php';
@@ -624,8 +639,6 @@ class Rolmar_Product_Importer {
                 require_once ABSPATH . 'wp-admin/includes/image.php';
             }
 
-            $file_ext  = pathinfo( wp_parse_url( $try_url, PHP_URL_PATH ), PATHINFO_EXTENSION );
-            $file_ext  = $file_ext ?: 'png';
             $file_name = sanitize_file_name( $sku . '.' . $file_ext );
 
             $file_array = array(
@@ -646,6 +659,76 @@ class Rolmar_Product_Importer {
         }
 
         Rolmar_Logger::warning( "All image URL variants failed for {$sku}. Original: {$url}", 'import' );
+        return false;
+    }
+
+    /**
+     * Convert image binary data to WebP format in memory.
+     *
+     * Uses GD (preferred) or Imagick. Returns false on failure
+     * so the caller can fall back to the original format.
+     *
+     * @param string $image_data  Raw image binary data (JPEG, PNG, GIF, BMP, etc.).
+     * @param string $sku         SKU for logging.
+     * @param int    $quality     WebP quality 1-100 (default 82 — good balance).
+     * @return string|false       WebP binary data or false on failure.
+     */
+    private function convert_to_webp( $image_data, $sku, $quality = 82 ) {
+        // Try GD first (faster, lower memory).
+        if ( function_exists( 'imagecreatefromstring' ) && function_exists( 'imagewebp' ) ) {
+            $gd_image = @imagecreatefromstring( $image_data );
+            if ( false === $gd_image ) {
+                Rolmar_Logger::warning( "WebP GD: cannot decode image for {$sku}, trying Imagick", 'import' );
+            } else {
+                // Preserve transparency (PNG/GIF → WebP supports alpha).
+                imagepalettetotruecolor( $gd_image );
+                imagealphablending( $gd_image, true );
+                imagesavealpha( $gd_image, true );
+
+                // Render WebP to memory buffer via output buffering.
+                ob_start();
+                $ok = imagewebp( $gd_image, null, $quality );
+                $webp_data = ob_get_clean();
+                imagedestroy( $gd_image );
+
+                if ( $ok && ! empty( $webp_data ) && strlen( $webp_data ) > 0 ) {
+                    $saved = strlen( $image_data ) - strlen( $webp_data );
+                    $pct   = round( $saved / strlen( $image_data ) * 100 );
+                    Rolmar_Logger::info( "WebP GD: {$sku} converted — saved {$pct}% (" . round( strlen( $image_data ) / 1024 ) . "KB → " . round( strlen( $webp_data ) / 1024 ) . "KB)", 'import' );
+                    return $webp_data;
+                }
+
+                Rolmar_Logger::warning( "WebP GD: imagewebp() failed for {$sku}", 'import' );
+            }
+        }
+
+        // Fallback to Imagick.
+        if ( class_exists( 'Imagick' ) ) {
+            try {
+                $imagick = new Imagick();
+                $imagick->readImageBlob( $image_data );
+                $imagick->setImageFormat( 'webp' );
+                $imagick->setImageCompressionQuality( $quality );
+
+                // Strip metadata to save space.
+                $imagick->stripImage();
+
+                $webp_data = $imagick->getImageBlob();
+                $imagick->clear();
+                $imagick->destroy();
+
+                if ( ! empty( $webp_data ) ) {
+                    $saved = strlen( $image_data ) - strlen( $webp_data );
+                    $pct   = round( $saved / strlen( $image_data ) * 100 );
+                    Rolmar_Logger::info( "WebP Imagick: {$sku} converted — saved {$pct}% (" . round( strlen( $image_data ) / 1024 ) . "KB → " . round( strlen( $webp_data ) / 1024 ) . "KB)", 'import' );
+                    return $webp_data;
+                }
+            } catch ( Exception $e ) {
+                Rolmar_Logger::warning( "WebP Imagick error for {$sku}: " . $e->getMessage(), 'import' );
+            }
+        }
+
+        Rolmar_Logger::warning( "WebP conversion unavailable for {$sku} — using original format", 'import' );
         return false;
     }
 
