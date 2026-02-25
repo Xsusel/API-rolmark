@@ -554,18 +554,25 @@ class Rolmar_Product_Importer {
             return false;
         }
 
-        // Remove trailing dots and spaces only (keep all query params intact).
+        // Remove trailing dots and spaces from the URL (API often returns "..").
         $original_url = rtrim( $url, '. ' );
 
         // Also prepare a cleaned variant without the 'c' param as fallback.
-        $cleaned_url = preg_replace( '/[?&]c=-[^&]*/', '', $original_url );
+        // The c= parameter is often truncated (e.g. "c=-bth..") and causes 404s.
+        $cleaned_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
         $cleaned_url = rtrim( $cleaned_url, '?&' );
         $cleaned_url = preg_replace( '/\?&/', '?', $cleaned_url );
 
-        // Try URLs in order: original with c param, then cleaned without c param.
+        // Try URLs in order: original, then without c param, then base URL only.
         $urls_to_try = array( $original_url );
         if ( $cleaned_url !== $original_url ) {
             $urls_to_try[] = $cleaned_url;
+        }
+
+        // Also try without all query params as last resort.
+        $base_url = strtok( $original_url, '?' );
+        if ( $base_url !== $original_url && $base_url !== $cleaned_url ) {
+            $urls_to_try[] = $base_url;
         }
 
         $api_key = get_option( 'rolmar_api_key', '' );
@@ -925,17 +932,15 @@ class Rolmar_Product_Importer {
         }
 
         $total_photos = count( $photos );
-        Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Processing...", 'import' );
+        Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Grouping by product...", 'import' );
 
-        $updated = 0;
-        $skipped = 0;
-        $errors = 0;
-
+        // Group photo entries by SKU/index.
+        // API returns one entry per photo: {"main":"1","index":"SKU","url":"..."}
+        $grouped = array();
         foreach ( $photos as $item ) {
             $sku = '';
-            $photo_urls = array();
 
-            // Handle various possible response structures.
+            // Handle various possible response structures for SKU.
             if ( isset( $item['Index'] ) ) {
                 $sku = $item['Index'];
             } elseif ( isset( $item['productIndex'] ) ) {
@@ -944,22 +949,59 @@ class Rolmar_Product_Importer {
                 $sku = $item['index'];
             }
 
-            // Extract photo URLs - API returns 'Photo' array field.
-            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
-                $photo_urls = $item['Photo'];
-            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
-                $photo_urls = array( $item['Photo'] );
-            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                $photo_urls = array( $item['url'] );
-            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
-                $photo_urls = $item['photos'];
-            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
-                $photo_urls = $item['images'];
-            } elseif ( isset( $item['photo'] ) ) {
-                $photo_urls = array( $item['photo'] );
+            if ( empty( $sku ) ) {
+                continue;
             }
 
-            if ( empty( $sku ) || empty( $photo_urls ) ) {
+            // Extract photo URL(s) from this entry.
+            $entry_urls = array();
+            $is_main = ! empty( $item['main'] ) && '1' === (string) $item['main'];
+
+            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
+                $entry_urls = $item['Photo'];
+            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $entry_urls = array( $item['Photo'] );
+            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                $entry_urls = array( $item['url'] );
+            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+                $entry_urls = $item['photos'];
+            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
+                $entry_urls = $item['images'];
+            } elseif ( isset( $item['photo'] ) ) {
+                $entry_urls = array( $item['photo'] );
+            }
+
+            if ( empty( $entry_urls ) ) {
+                continue;
+            }
+
+            if ( ! isset( $grouped[ $sku ] ) ) {
+                $grouped[ $sku ] = array(
+                    'main'    => array(),
+                    'gallery' => array(),
+                );
+            }
+
+            foreach ( $entry_urls as $entry_url ) {
+                if ( $is_main && empty( $grouped[ $sku ]['main'] ) ) {
+                    $grouped[ $sku ]['main'][] = $entry_url;
+                } else {
+                    $grouped[ $sku ]['gallery'][] = $entry_url;
+                }
+            }
+        }
+
+        $total_products = count( $grouped );
+        Rolmar_Logger::info( "Grouped into {$total_products} products from {$total_photos} photo entries.", 'import' );
+
+        $updated = 0;
+        $skipped = 0;
+        $errors = 0;
+
+        foreach ( $grouped as $sku => $photo_data ) {
+            $all_urls = array_merge( $photo_data['main'], $photo_data['gallery'] );
+
+            if ( empty( $all_urls ) ) {
                 $skipped++;
                 continue;
             }
@@ -977,21 +1019,23 @@ class Rolmar_Product_Importer {
                 continue;
             }
 
-            // Set featured image from the first photo if not set.
-            if ( ! get_post_thumbnail_id( $product_id ) && ! empty( $photo_urls[0] ) ) {
-                $image_id = $this->upload_image_from_url( $photo_urls[0], $sku . '_main' );
+            // Set featured image: prefer url marked as main, otherwise first url.
+            if ( ! get_post_thumbnail_id( $product_id ) ) {
+                $main_url = ! empty( $photo_data['main'][0] ) ? $photo_data['main'][0] : $all_urls[0];
+                $image_id = $this->upload_image_from_url( $main_url, $sku . '_main' );
                 if ( $image_id ) {
                     $product->set_image_id( $image_id );
                 }
             }
 
             // Set gallery images from remaining photos.
-            if ( count( $photo_urls ) > 1 ) {
+            $gallery_urls = $photo_data['gallery'];
+            if ( ! empty( $gallery_urls ) ) {
                 $existing_gallery = $product->get_gallery_image_ids();
                 if ( empty( $existing_gallery ) ) {
                     $gallery_ids = array();
-                    for ( $i = 1; $i < count( $photo_urls ); $i++ ) {
-                        $gallery_id = $this->upload_image_from_url( $photo_urls[ $i ], $sku . '_' . $i );
+                    foreach ( $gallery_urls as $i => $gallery_url ) {
+                        $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_' . ( $i + 1 ) );
                         if ( $gallery_id ) {
                             $gallery_ids[] = $gallery_id;
                         }
