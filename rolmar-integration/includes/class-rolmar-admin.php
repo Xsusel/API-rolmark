@@ -31,6 +31,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_debug_images', array( $this, 'ajax_debug_images' ) );
         add_action( 'wp_ajax_rolmar_debug_photos_api', array( $this, 'ajax_debug_photos_api' ) );
         add_action( 'wp_ajax_rolmar_debug_existing_products', array( $this, 'ajax_debug_existing_products' ) );
+        add_action( 'wp_ajax_rolmar_run_diagnostics', array( $this, 'ajax_run_diagnostics' ) );
     }
 
     public function add_menu() {
@@ -353,6 +354,18 @@ class Rolmar_Admin {
                 </button>
                 <span id="rolmar-test-result" class="rolmar-status-message"></span>
             </p>
+
+            <hr />
+            <h2><?php esc_html_e( 'Diagnostyka', 'rolmar-integration' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Kompleksowa diagnostyka: IP serwera, dostęp do API, serwer zdjęć, konfiguracja pluginu, WooCommerce.', 'rolmar-integration' ); ?>
+            </p>
+            <p>
+                <button type="button" id="rolmar-run-diagnostics" class="button button-primary" style="font-size: 14px; padding: 4px 20px; height: auto;">
+                    <?php esc_html_e( 'Uruchom diagnostyke', 'rolmar-integration' ); ?>
+                </button>
+            </p>
+            <div id="rolmar-diagnostics-result" style="margin-top: 15px;"></div>
 
             <hr />
             <h2><?php esc_html_e( 'Debug obrazków', 'rolmar-integration' ); ?></h2>
@@ -1150,6 +1163,302 @@ class Rolmar_Admin {
             'total_wc_products' => count( $wc_products ),
             'results' => $results
         ) );
+    }
+
+    /**
+     * AJAX handler for comprehensive diagnostics.
+     */
+    public function ajax_run_diagnostics() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnien.' ) );
+        }
+
+        $checks = array();
+
+        // 1. Server outgoing IP.
+        $ip_response = wp_remote_get( 'https://api.ipify.org', array( 'timeout' => 10 ) );
+        if ( ! is_wp_error( $ip_response ) ) {
+            $server_ip = trim( wp_remote_retrieve_body( $ip_response ) );
+            $checks[] = array(
+                'name'   => 'IP wychodzace serwera',
+                'status' => 'info',
+                'value'  => $server_ip,
+                'hint'   => 'To IP musi byc na whiteliscie u Rolmar (serwer zdjec).',
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'IP wychodzace serwera',
+                'status' => 'error',
+                'value'  => 'Nie udalo sie pobrac',
+                'hint'   => 'Blad: ' . $ip_response->get_error_message(),
+            );
+        }
+
+        // 2. PHP version & extensions.
+        $php_version = phpversion();
+        $required_extensions = array( 'curl', 'json', 'mbstring' );
+        $missing_ext = array();
+        foreach ( $required_extensions as $ext ) {
+            if ( ! extension_loaded( $ext ) ) {
+                $missing_ext[] = $ext;
+            }
+        }
+        $checks[] = array(
+            'name'   => 'PHP',
+            'status' => empty( $missing_ext ) ? 'ok' : 'warning',
+            'value'  => 'PHP ' . $php_version . ' | Rozszerzenia: ' . implode( ', ', $required_extensions ),
+            'hint'   => empty( $missing_ext ) ? 'Wszystkie wymagane rozszerzenia zaladowane.' : 'Brak: ' . implode( ', ', $missing_ext ),
+        );
+
+        // 3. API key configured.
+        $api_key = get_option( 'rolmar_api_key', '' );
+        $checks[] = array(
+            'name'   => 'Klucz API',
+            'status' => ! empty( $api_key ) ? 'ok' : 'error',
+            'value'  => ! empty( $api_key ) ? 'Skonfigurowany (' . strlen( $api_key ) . ' znakow)' : 'BRAK',
+            'hint'   => ! empty( $api_key ) ? '' : 'Ustaw klucz API w ustawieniach powyzej.',
+        );
+
+        // 4. API connection test.
+        $api = new Rolmar_API_Client();
+        if ( $api->is_configured() ) {
+            $api_result = $api->test_connection();
+            if ( is_wp_error( $api_result ) ) {
+                $checks[] = array(
+                    'name'   => 'Polaczenie z API Rolmar',
+                    'status' => 'error',
+                    'value'  => 'BLAD',
+                    'hint'   => $api_result->get_error_message(),
+                );
+            } else {
+                $product_count = is_array( $api_result ) ? count( $api_result ) : 0;
+                $checks[] = array(
+                    'name'   => 'Polaczenie z API Rolmar',
+                    'status' => 'ok',
+                    'value'  => 'OK (' . $product_count . ' produktow w API)',
+                    'hint'   => '',
+                );
+            }
+        } else {
+            $checks[] = array(
+                'name'   => 'Polaczenie z API Rolmar',
+                'status' => 'warning',
+                'value'  => 'Pominieto',
+                'hint'   => 'Najpierw skonfiguruj klucz API.',
+            );
+        }
+
+        // 5. getPhotos API test.
+        if ( $api->is_configured() ) {
+            $photos_result = $api->get_photos();
+            if ( is_wp_error( $photos_result ) ) {
+                $checks[] = array(
+                    'name'   => 'API getPhotos',
+                    'status' => 'error',
+                    'value'  => 'BLAD',
+                    'hint'   => $photos_result->get_error_message(),
+                );
+            } else {
+                $photo_count = is_array( $photos_result ) ? count( $photos_result ) : 0;
+                $checks[] = array(
+                    'name'   => 'API getPhotos',
+                    'status' => $photo_count > 0 ? 'ok' : 'warning',
+                    'value'  => $photo_count . ' wpisow ze zdjeciami',
+                    'hint'   => $photo_count > 0 ? '' : 'API nie zwraca zadnych zdjec.',
+                );
+                // Save for later use.
+                $photos_data = $photos_result;
+            }
+        }
+
+        // 6. Photo server accessibility - test photo2.rol-mar.com.pl directly.
+        $photo_server_url = 'https://photo2.rol-mar.com.pl';
+        $photo_server_response = wp_remote_get( $photo_server_url, array(
+            'timeout'   => 10,
+            'sslverify' => false,
+        ) );
+        if ( ! is_wp_error( $photo_server_response ) ) {
+            $photo_server_http = wp_remote_retrieve_response_code( $photo_server_response );
+            $is_accessible = ( $photo_server_http >= 200 && $photo_server_http < 500 );
+            $checks[] = array(
+                'name'   => 'Serwer zdjec (photo2.rol-mar.com.pl)',
+                'status' => $is_accessible ? 'ok' : 'error',
+                'value'  => 'HTTP ' . $photo_server_http,
+                'hint'   => $is_accessible
+                    ? 'Serwer odpowiada. IP serwera jest na whiteliscie.'
+                    : 'Serwer nie odpowiada. Sprawdz czy IP jest na whiteliscie u Rolmar.',
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'Serwer zdjec (photo2.rol-mar.com.pl)',
+                'status' => 'error',
+                'value'  => 'Brak polaczenia',
+                'hint'   => $photo_server_response->get_error_message() . ' — prawdopodobnie IP nie jest na whiteliscie.',
+            );
+        }
+
+        // 7. Test actual photo URL from getPhotos.
+        $photo_test_url = '';
+        $photo_test_sku = '';
+        if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
+            foreach ( $photos_data as $item ) {
+                if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) && ! empty( $item['Photo'][0] ) ) {
+                    $photo_test_url = $this->clean_photo_url( $item['Photo'][0] );
+                    $photo_test_sku = isset( $item['Index'] ) ? $item['Index'] : 'N/A';
+                    break;
+                }
+            }
+        }
+
+        if ( ! empty( $photo_test_url ) ) {
+            $photo_dl_response = wp_remote_head( $photo_test_url, array(
+                'timeout'   => 15,
+                'sslverify' => false,
+                'headers'   => array(
+                    'wsKey' => $api_key,
+                ),
+            ) );
+            if ( ! is_wp_error( $photo_dl_response ) ) {
+                $photo_dl_http = wp_remote_retrieve_response_code( $photo_dl_response );
+                $content_type  = wp_remote_retrieve_header( $photo_dl_response, 'content-type' );
+                $content_len   = wp_remote_retrieve_header( $photo_dl_response, 'content-length' );
+                $is_image = ( 200 === $photo_dl_http );
+                $detail = 'HTTP ' . $photo_dl_http;
+                if ( $content_type ) {
+                    $detail .= ' | Content-Type: ' . $content_type;
+                }
+                if ( $content_len ) {
+                    $detail .= ' | Rozmiar: ' . round( intval( $content_len ) / 1024 ) . ' KB';
+                }
+                $checks[] = array(
+                    'name'   => 'Pobieranie zdjecia (SKU: ' . $photo_test_sku . ')',
+                    'status' => $is_image ? 'ok' : 'error',
+                    'value'  => $detail,
+                    'hint'   => $is_image
+                        ? 'Zdjecie pobiera sie poprawnie!'
+                        : 'Nie mozna pobrac zdjecia. URL: ' . $photo_test_url,
+                );
+            } else {
+                $checks[] = array(
+                    'name'   => 'Pobieranie zdjecia (SKU: ' . $photo_test_sku . ')',
+                    'status' => 'error',
+                    'value'  => 'Blad polaczenia',
+                    'hint'   => $photo_dl_response->get_error_message() . ' | URL: ' . $photo_test_url,
+                );
+            }
+        } else {
+            $checks[] = array(
+                'name'   => 'Pobieranie zdjecia (test)',
+                'status' => 'warning',
+                'value'  => 'Brak URL do testu',
+                'hint'   => 'getPhotos nie zwrocilo zadnych URL-i zdjec.',
+            );
+        }
+
+        // 8. WooCommerce products count.
+        $wc_total = 0;
+        $wc_with_images = 0;
+        $wc_without_images = 0;
+        if ( function_exists( 'wc_get_products' ) ) {
+            $wc_count_args = array(
+                'limit'  => -1,
+                'status' => 'publish',
+                'return' => 'ids',
+            );
+            $wc_ids = wc_get_products( $wc_count_args );
+            $wc_total = count( $wc_ids );
+
+            // Count products with/without images (check first 200 to avoid timeout).
+            $check_ids = array_slice( $wc_ids, 0, 200 );
+            foreach ( $check_ids as $pid ) {
+                if ( get_post_thumbnail_id( $pid ) ) {
+                    $wc_with_images++;
+                } else {
+                    $wc_without_images++;
+                }
+            }
+
+            $sample_note = $wc_total > 200 ? ' (sprawdzono pierwsze 200)' : '';
+            $checks[] = array(
+                'name'   => 'Produkty WooCommerce',
+                'status' => $wc_total > 0 ? 'ok' : 'warning',
+                'value'  => $wc_total . ' opublikowanych produktow',
+                'hint'   => 'Ze zdjeciami: ' . $wc_with_images . ' | Bez zdjec: ' . $wc_without_images . $sample_note,
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'WooCommerce',
+                'status' => 'error',
+                'value'  => 'Nieaktywne',
+                'hint'   => 'WooCommerce nie jest aktywne.',
+            );
+        }
+
+        // 9. Plugin configuration summary.
+        $env = get_option( 'rolmar_api_environment', 'production' );
+        $freq = get_option( 'rolmar_sync_frequency', 'daily' );
+        $import_images = get_option( 'rolmar_import_images', 'yes' );
+        $batch_size = get_option( 'rolmar_batch_size', 50 );
+        $discount = get_option( 'rolmar_discount_percent', 0 );
+        $allowed_cats = get_option( 'rolmar_allowed_categories', '[]' );
+        $cats_count = 0;
+        $cats_arr = json_decode( $allowed_cats, true );
+        if ( is_array( $cats_arr ) ) {
+            $cats_count = count( $cats_arr );
+        }
+        $checks[] = array(
+            'name'   => 'Konfiguracja pluginu',
+            'status' => 'info',
+            'value'  => 'Srodowisko: ' . $env . ' | Czestotliwosc: ' . $freq . ' | Batch: ' . $batch_size,
+            'hint'   => 'Import zdjec: ' . $import_images . ' | Rabat: ' . $discount . '% | Filtry kategorii: ' . ( $cats_count > 0 ? $cats_count . ' wybranych' : 'brak (wszystkie)' ),
+        );
+
+        // 10. Last sync timestamps.
+        $last_product = get_option( 'rolmar_last_product_sync', '' );
+        $last_stock   = get_option( 'rolmar_last_stock_sync', '' );
+        $last_photo   = get_option( 'rolmar_last_photo_sync', '' );
+        $checks[] = array(
+            'name'   => 'Ostatnie synchronizacje',
+            'status' => 'info',
+            'value'  => 'Produkty: ' . ( $last_product ?: 'nigdy' ),
+            'hint'   => 'Stany: ' . ( $last_stock ?: 'nigdy' ) . ' | Zdjecia: ' . ( $last_photo ?: 'nigdy' ),
+        );
+
+        // 11. Disk space for uploads.
+        $upload_dir = wp_upload_dir();
+        $free_space = @disk_free_space( $upload_dir['basedir'] );
+        if ( false !== $free_space ) {
+            $free_mb = round( $free_space / 1024 / 1024 );
+            $checks[] = array(
+                'name'   => 'Wolne miejsce na dysku',
+                'status' => $free_mb > 100 ? 'ok' : ( $free_mb > 20 ? 'warning' : 'error' ),
+                'value'  => $free_mb . ' MB wolnego',
+                'hint'   => $free_mb < 100 ? 'Moze byc za malo na import zdjec.' : 'OK.',
+            );
+        }
+
+        // 12. Memory limit.
+        $memory_limit = ini_get( 'memory_limit' );
+        $memory_bytes = wp_convert_hr_to_bytes( $memory_limit );
+        $checks[] = array(
+            'name'   => 'PHP memory_limit',
+            'status' => $memory_bytes >= 256 * 1024 * 1024 ? 'ok' : 'warning',
+            'value'  => $memory_limit,
+            'hint'   => $memory_bytes < 256 * 1024 * 1024 ? 'Zalecane minimum to 256M dla importu duzych katalogow.' : 'OK.',
+        );
+
+        // 13. Max execution time.
+        $max_exec = ini_get( 'max_execution_time' );
+        $checks[] = array(
+            'name'   => 'PHP max_execution_time',
+            'status' => ( intval( $max_exec ) >= 120 || intval( $max_exec ) === 0 ) ? 'ok' : 'warning',
+            'value'  => $max_exec . 's' . ( intval( $max_exec ) === 0 ? ' (bez limitu)' : '' ),
+            'hint'   => ( intval( $max_exec ) > 0 && intval( $max_exec ) < 120 ) ? 'Zalecane minimum 120s.' : 'OK.',
+        );
+
+        wp_send_json_success( array( 'checks' => $checks ) );
     }
 
     /**

@@ -379,6 +379,98 @@
         }
     }
 
+    // Run Diagnostics Button
+    $('#rolmar-run-diagnostics').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-diagnostics-result');
+
+        $btn.prop('disabled', true).text('Diagnostyka w toku...');
+        $result.html('<div class="rolmar-diag-loading"><span class="spinner is-active" style="float:none; margin:0 8px 0 0;"></span> Sprawdzanie... (moze to potrwac do 30s)</div>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_run_diagnostics',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('Uruchom diagnostyke');
+
+            if (response.success && response.data.checks) {
+                var checks = response.data.checks;
+                var html = '<div class="rolmar-diag-container">';
+                html += '<h3 class="rolmar-diag-title">Wyniki diagnostyki</h3>';
+                html += '<table class="rolmar-diag-table widefat">';
+                html += '<thead><tr>';
+                html += '<th style="width: 30px;"></th>';
+                html += '<th style="width: 250px;">Test</th>';
+                html += '<th>Wynik</th>';
+                html += '<th>Uwagi</th>';
+                html += '</tr></thead><tbody>';
+
+                var okCount = 0;
+                var warnCount = 0;
+                var errCount = 0;
+
+                checks.forEach(function (check) {
+                    var icon = '';
+                    var rowClass = '';
+                    switch (check.status) {
+                        case 'ok':
+                            icon = '<span class="rolmar-diag-icon rolmar-diag-ok">&#10004;</span>';
+                            rowClass = 'rolmar-diag-row-ok';
+                            okCount++;
+                            break;
+                        case 'warning':
+                            icon = '<span class="rolmar-diag-icon rolmar-diag-warn">&#9888;</span>';
+                            rowClass = 'rolmar-diag-row-warn';
+                            warnCount++;
+                            break;
+                        case 'error':
+                            icon = '<span class="rolmar-diag-icon rolmar-diag-err">&#10008;</span>';
+                            rowClass = 'rolmar-diag-row-err';
+                            errCount++;
+                            break;
+                        case 'info':
+                            icon = '<span class="rolmar-diag-icon rolmar-diag-info">i</span>';
+                            rowClass = 'rolmar-diag-row-info';
+                            break;
+                    }
+
+                    html += '<tr class="' + rowClass + '">';
+                    html += '<td style="text-align:center;">' + icon + '</td>';
+                    html += '<td><strong>' + check.name + '</strong></td>';
+                    html += '<td>' + check.value + '</td>';
+                    html += '<td style="color:#666; font-size:12px;">' + (check.hint || '') + '</td>';
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+
+                // Summary bar
+                html += '<div class="rolmar-diag-summary">';
+                if (errCount > 0) {
+                    html += '<span class="rolmar-diag-badge rolmar-diag-badge-err">' + errCount + ' blad(y)</span> ';
+                }
+                if (warnCount > 0) {
+                    html += '<span class="rolmar-diag-badge rolmar-diag-badge-warn">' + warnCount + ' ostrzezenie(a)</span> ';
+                }
+                html += '<span class="rolmar-diag-badge rolmar-diag-badge-ok">' + okCount + ' OK</span>';
+
+                if (errCount === 0 && warnCount === 0) {
+                    html += '<p class="rolmar-diag-allgood">Wszystko dziala poprawnie! Mozesz uruchomic synchronizacje zdjec.</p>';
+                } else if (errCount > 0) {
+                    html += '<p class="rolmar-diag-problem">Wykryto problemy. Napraw bledy zaznaczone na czerwono przed synchronizacja.</p>';
+                }
+                html += '</div></div>';
+
+                $result.html(html);
+            } else {
+                $result.html('<div class="notice notice-error"><p>Blad: ' + (response.data.message || 'Nieznany blad') + '</p></div>');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false).text('Uruchom diagnostyke');
+            $result.html('<div class="notice notice-error"><p>Blad polaczenia z serwerem.</p></div>');
+        });
+    });
+
     // Debug Images Button
     $('#rolmar-debug-images').on('click', function () {
         var $btn = $(this);

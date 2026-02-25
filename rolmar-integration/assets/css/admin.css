@@ -164,6 +164,134 @@
     vertical-align: middle;
 }
 
+/* Diagnostics */
+.rolmar-diag-loading {
+    padding: 15px;
+    background: #f0f6fc;
+    border-left: 4px solid #0073aa;
+    font-size: 14px;
+}
+
+.rolmar-diag-container {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.rolmar-diag-title {
+    margin: 0;
+    padding: 12px 16px;
+    background: #f0f0f1;
+    border-bottom: 1px solid #ccd0d4;
+    font-size: 14px;
+}
+
+.rolmar-diag-table {
+    margin: 0 !important;
+    border: none !important;
+}
+
+.rolmar-diag-table th {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #666;
+    padding: 8px 12px;
+}
+
+.rolmar-diag-table td {
+    padding: 10px 12px;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.rolmar-diag-icon {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: bold;
+    color: #fff;
+}
+
+.rolmar-diag-ok {
+    background: #00a32a;
+}
+
+.rolmar-diag-warn {
+    background: #dba617;
+    font-size: 15px;
+}
+
+.rolmar-diag-err {
+    background: #d63638;
+}
+
+.rolmar-diag-info {
+    background: #0073aa;
+    font-style: italic;
+    font-family: Georgia, serif;
+}
+
+.rolmar-diag-row-ok {
+    background: #f0faf0 !important;
+}
+
+.rolmar-diag-row-warn {
+    background: #fef8ee !important;
+}
+
+.rolmar-diag-row-err {
+    background: #fcf0f0 !important;
+}
+
+.rolmar-diag-row-info {
+    background: #f0f6fc !important;
+}
+
+.rolmar-diag-summary {
+    padding: 14px 16px;
+    border-top: 1px solid #ccd0d4;
+    background: #f9f9f9;
+}
+
+.rolmar-diag-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    margin-right: 6px;
+}
+
+.rolmar-diag-badge-ok {
+    background: #00a32a;
+}
+
+.rolmar-diag-badge-warn {
+    background: #dba617;
+}
+
+.rolmar-diag-badge-err {
+    background: #d63638;
+}
+
+.rolmar-diag-allgood {
+    margin: 10px 0 0;
+    color: #00a32a;
+    font-weight: 600;
+}
+
+.rolmar-diag-problem {
+    margin: 10px 0 0;
+    color: #d63638;
+    font-weight: 600;
+}
+
 /* Log viewer */
 .rolmar-log-viewer {
     background: #1d2327;
