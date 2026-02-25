@@ -1745,12 +1745,8 @@ class Rolmar_Admin {
         $import_images = get_option( 'rolmar_import_images', 'yes' );
         $batch_size = get_option( 'rolmar_batch_size', 50 );
         $discount = get_option( 'rolmar_discount_percent', 0 );
-        $allowed_cats = get_option( 'rolmar_allowed_categories', '[]' );
-        $cats_count = 0;
-        $cats_arr = json_decode( $allowed_cats, true );
-        if ( is_array( $cats_arr ) ) {
-            $cats_count = count( $cats_arr );
-        }
+        $allowed_cats = get_option( 'rolmar_allowed_categories', array() );
+        $cats_count = is_array( $allowed_cats ) ? count( $allowed_cats ) : 0;
         $checks[] = array(
             'name'   => 'Konfiguracja pluginu',
             'status' => 'info',
