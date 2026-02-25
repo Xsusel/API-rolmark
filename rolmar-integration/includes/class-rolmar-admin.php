@@ -1675,8 +1675,12 @@ class Rolmar_Admin {
             $checks[] = array(
                 'name'   => 'Test zdjecia SKU: ' . $photo_test_sku,
                 'status' => $any_photo_ok ? 'ok' : 'error',
-                'value'  => $any_photo_ok ? 'DZIALA! Wariant: ' . $working_variant : 'ZADEN wariant nie dziala',
-                'hint'   => 'Oryginalny URL: ' . $photo_test_url_raw,
+                'value'  => $any_photo_ok
+                    ? 'DZIALA! Wariant: ' . $working_variant
+                    : 'ZADEN wariant nie dziala',
+                'hint'   => $any_photo_ok
+                    ? 'Oryginalny URL: ' . $photo_test_url_raw
+                    : 'Wszystkie warianty URL zwracaja 404. Sprawdz u Rolmar: (1) czy IP ' . ( ! empty( $server_ip ) ? $server_ip : '' ) . ' jest na whiteliscie takze dla photo2.rol-mar.com.pl, (2) czy format URL zdjec sie nie zmienil. URL: ' . $photo_test_url_raw,
             );
 
             $checks[] = array(
@@ -1685,6 +1689,40 @@ class Rolmar_Admin {
                 'value'  => count( $variant_results ) . ' testow wykonanych',
                 'hint'   => implode( ' || ', $variant_results ),
             );
+
+            // 13b. If all fail — show the actual response body to help diagnose (IP block? wrong URL? server error?)
+            if ( ! $any_photo_ok ) {
+                $diag_url = $no_qs ?: $clean_url; // simplest URL variant (no query string).
+                $diag_resp = wp_remote_get( $diag_url, array(
+                    'timeout'   => 5,
+                    'sslverify' => false,
+                    'headers'   => array( 'wsKey' => $api_key ),
+                ) );
+                $diag_body = '';
+                $diag_code = 0;
+                if ( ! is_wp_error( $diag_resp ) ) {
+                    $diag_code = wp_remote_retrieve_response_code( $diag_resp );
+                    $diag_body = wp_remote_retrieve_body( $diag_resp );
+                }
+
+                // Extract useful text from HTML response.
+                $diag_text = '';
+                if ( ! empty( $diag_body ) ) {
+                    // Strip HTML tags, get first 300 chars.
+                    $diag_text = trim( wp_strip_all_tags( $diag_body ) );
+                    $diag_text = preg_replace( '/\s+/', ' ', $diag_text );
+                    if ( strlen( $diag_text ) > 300 ) {
+                        $diag_text = substr( $diag_text, 0, 300 ) . '...';
+                    }
+                }
+
+                $checks[] = array(
+                    'name'   => 'Tresc odpowiedzi serwera zdjec',
+                    'status' => 'info',
+                    'value'  => 'HTTP ' . $diag_code . ' dla: ' . $diag_url,
+                    'hint'   => ! empty( $diag_text ) ? $diag_text : '(pusta odpowiedz)',
+                );
+            }
 
             // 14. If photo works — try downloading and saving to uploads.
             if ( $any_photo_ok ) {
