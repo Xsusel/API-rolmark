@@ -191,7 +191,7 @@ class Rolmar_API_Client {
             Rolmar_Logger::info( "DEBUG getPhotos RAW (first 5000 chars): {$preview}", 'api' );
         }
 
-        $data = json_decode( $raw_body, true );
+        $data = json_decode( (string) $raw_body, true );
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
             $error_msg = "API JSON parse error ({$method}): " . json_last_error_msg();
