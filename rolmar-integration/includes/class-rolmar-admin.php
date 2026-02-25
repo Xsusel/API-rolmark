@@ -31,6 +31,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_debug_images', array( $this, 'ajax_debug_images' ) );
         add_action( 'wp_ajax_rolmar_debug_photos_api', array( $this, 'ajax_debug_photos_api' ) );
         add_action( 'wp_ajax_rolmar_debug_existing_products', array( $this, 'ajax_debug_existing_products' ) );
+        add_action( 'wp_ajax_rolmar_run_diagnostics', array( $this, 'ajax_run_diagnostics' ) );
     }
 
     public function add_menu() {
@@ -353,6 +354,18 @@ class Rolmar_Admin {
                 </button>
                 <span id="rolmar-test-result" class="rolmar-status-message"></span>
             </p>
+
+            <hr />
+            <h2><?php esc_html_e( 'Diagnostyka', 'rolmar-integration' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Kompleksowa diagnostyka: IP serwera, dostęp do API, serwer zdjęć, konfiguracja pluginu, WooCommerce.', 'rolmar-integration' ); ?>
+            </p>
+            <p>
+                <button type="button" id="rolmar-run-diagnostics" class="button button-primary" style="font-size: 14px; padding: 4px 20px; height: auto;">
+                    <?php esc_html_e( 'Uruchom diagnostyke', 'rolmar-integration' ); ?>
+                </button>
+            </p>
+            <div id="rolmar-diagnostics-result" style="margin-top: 15px;"></div>
 
             <hr />
             <h2><?php esc_html_e( 'Debug obrazków', 'rolmar-integration' ); ?></h2>
@@ -1150,6 +1163,622 @@ class Rolmar_Admin {
             'total_wc_products' => count( $wc_products ),
             'results' => $results
         ) );
+    }
+
+    /**
+     * AJAX handler for comprehensive diagnostics.
+     */
+    public function ajax_run_diagnostics() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnien.' ) );
+        }
+
+        @set_time_limit( 120 );
+
+        $checks = array();
+        $photos_data = null;
+
+        // =====================================================================
+        // SEKCJA 1: SERWER I SRODOWISKO
+        // =====================================================================
+
+        // 1. Server outgoing IP (try multiple services for reliability).
+        $server_ip = '';
+        $ip_services = array(
+            'https://api.ipify.org',
+            'https://ifconfig.me/ip',
+            'https://icanhazip.com',
+        );
+        $ip_service_used = '';
+        foreach ( $ip_services as $ip_service ) {
+            $ip_response = wp_remote_get( $ip_service, array( 'timeout' => 5 ) );
+            if ( ! is_wp_error( $ip_response ) && 200 === wp_remote_retrieve_response_code( $ip_response ) ) {
+                $server_ip = trim( wp_remote_retrieve_body( $ip_response ) );
+                $ip_service_used = $ip_service;
+                break;
+            }
+        }
+        if ( ! empty( $server_ip ) ) {
+            $checks[] = array(
+                'name'   => 'IP wychodzace serwera',
+                'status' => 'info',
+                'value'  => $server_ip,
+                'hint'   => 'To IP musi byc na whiteliscie u Rolmar. Zrodlo: ' . $ip_service_used,
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'IP wychodzace serwera',
+                'status' => 'error',
+                'value'  => 'Nie udalo sie pobrac z zadnego serwisu',
+                'hint'   => 'Hosting blokuje polaczenia wychodzace?',
+            );
+        }
+
+        // 2. PHP version & extensions (including image processing).
+        $php_version = phpversion();
+        $all_extensions = array(
+            'curl'      => 'Pobieranie plikow z URL',
+            'json'      => 'Parsowanie odpowiedzi API',
+            'mbstring'  => 'Obsluga polskich znakow',
+            'gd'        => 'Przetwarzanie obrazkow (skalowanie)',
+            'imagick'   => 'Przetwarzanie obrazkow (alternatywa)',
+            'openssl'   => 'Polaczenia HTTPS/SSL',
+            'fileinfo'  => 'Rozpoznawanie typu MIME plikow',
+        );
+        $loaded = array();
+        $missing = array();
+        foreach ( $all_extensions as $ext => $desc ) {
+            if ( extension_loaded( $ext ) ) {
+                $loaded[] = $ext;
+            } else {
+                $missing[] = $ext . ' (' . $desc . ')';
+            }
+        }
+        $has_image_lib = extension_loaded( 'gd' ) || extension_loaded( 'imagick' );
+        $checks[] = array(
+            'name'   => 'PHP i rozszerzenia',
+            'status' => ( empty( $missing ) || $has_image_lib ) ? 'ok' : 'warning',
+            'value'  => 'PHP ' . $php_version . ' | Zaladowane: ' . implode( ', ', $loaded ),
+            'hint'   => ! empty( $missing ) ? 'Brak: ' . implode( ', ', $missing ) : 'Wszystko OK.',
+        );
+
+        // 3. Image processing library.
+        $gd_info_str = '';
+        if ( extension_loaded( 'gd' ) ) {
+            $gd = gd_info();
+            $gd_info_str = 'GD ' . ( isset( $gd['GD Version'] ) ? $gd['GD Version'] : '?' );
+            $gd_info_str .= ' | JPEG: ' . ( ! empty( $gd['JPEG Support'] ) ? 'tak' : 'nie' );
+            $gd_info_str .= ' | PNG: ' . ( ! empty( $gd['PNG Support'] ) ? 'tak' : 'nie' );
+            $gd_info_str .= ' | WebP: ' . ( ! empty( $gd['WebP Support'] ) ? 'tak' : 'nie' );
+        }
+        if ( extension_loaded( 'imagick' ) ) {
+            $gd_info_str .= ( $gd_info_str ? ' + ' : '' ) . 'ImageMagick';
+        }
+        $checks[] = array(
+            'name'   => 'Biblioteki obrazkow',
+            'status' => $has_image_lib ? 'ok' : 'error',
+            'value'  => $has_image_lib ? $gd_info_str : 'BRAK GD i ImageMagick!',
+            'hint'   => $has_image_lib ? 'OK — WordPress moze przetwarzac obrazki.' : 'WordPress nie bedzie mogl tworzyc miniaturek zdjec!',
+        );
+
+        // 4. Memory, execution time, upload limits.
+        $memory_limit = ini_get( 'memory_limit' );
+        $memory_bytes = wp_convert_hr_to_bytes( $memory_limit );
+        $max_exec = ini_get( 'max_execution_time' );
+        $upload_max = ini_get( 'upload_max_filesize' );
+        $post_max = ini_get( 'post_max_size' );
+        $allow_fopen = ini_get( 'allow_url_fopen' );
+
+        $limits_ok = true;
+        $limits_hints = array();
+        if ( $memory_bytes < 256 * 1024 * 1024 ) {
+            $limits_ok = false;
+            $limits_hints[] = 'memory_limit=' . $memory_limit . ' (zalecane 256M+)';
+        }
+        if ( intval( $max_exec ) > 0 && intval( $max_exec ) < 120 ) {
+            $limits_ok = false;
+            $limits_hints[] = 'max_execution_time=' . $max_exec . 's (zalecane 120s+)';
+        }
+
+        $checks[] = array(
+            'name'   => 'Limity PHP',
+            'status' => $limits_ok ? 'ok' : 'warning',
+            'value'  => 'memory=' . $memory_limit . ' | max_exec=' . $max_exec . 's | upload=' . $upload_max . ' | post=' . $post_max . ' | allow_url_fopen=' . ( $allow_fopen ? 'on' : 'off' ),
+            'hint'   => $limits_ok ? 'OK.' : 'Za niskie: ' . implode( ', ', $limits_hints ),
+        );
+
+        // 5. WordPress upload dir — writable test.
+        $upload_dir = wp_upload_dir();
+        $test_file = $upload_dir['basedir'] . '/rolmar-diag-test-' . time() . '.tmp';
+        $write_ok = @file_put_contents( $test_file, 'test' );
+        if ( $write_ok ) {
+            @unlink( $test_file );
+        }
+        $free_space = @disk_free_space( $upload_dir['basedir'] );
+        $free_mb = $free_space !== false ? round( $free_space / 1024 / 1024 ) : '?';
+
+        $checks[] = array(
+            'name'   => 'Katalog uploads',
+            'status' => $write_ok ? 'ok' : 'error',
+            'value'  => ( $write_ok ? 'Zapisywalny' : 'BRAK ZAPISU!' ) . ' | Wolne: ' . $free_mb . ' MB',
+            'hint'   => $write_ok ? 'Sciezka: ' . $upload_dir['basedir'] : 'WordPress nie moze zapisac plikow! Sprawdz uprawnienia katalogu.',
+        );
+
+        // =====================================================================
+        // SEKCJA 2: API ROLMAR
+        // =====================================================================
+
+        // 6. API key.
+        $api_key = get_option( 'rolmar_api_key', '' );
+        $checks[] = array(
+            'name'   => 'Klucz API',
+            'status' => ! empty( $api_key ) ? 'ok' : 'error',
+            'value'  => ! empty( $api_key ) ? 'Skonfigurowany (' . strlen( $api_key ) . ' znakow)' : 'BRAK',
+            'hint'   => ! empty( $api_key ) ? '' : 'Ustaw klucz API w ustawieniach powyzej.',
+        );
+
+        // 7. DNS resolution for API and photo servers.
+        $dns_hosts = array(
+            'datalink.rol-mar.com.pl' => 'Serwer API',
+            'photo2.rol-mar.com.pl'   => 'Serwer zdjec',
+        );
+        foreach ( $dns_hosts as $hostname => $label ) {
+            $ip = @gethostbyname( $hostname );
+            $dns_ok = ( $ip !== $hostname ); // gethostbyname returns hostname on failure.
+            $checks[] = array(
+                'name'   => 'DNS: ' . $label,
+                'status' => $dns_ok ? 'ok' : 'error',
+                'value'  => $dns_ok ? $hostname . ' -> ' . $ip : 'Nie mozna rozwiazac ' . $hostname,
+                'hint'   => $dns_ok ? '' : 'Serwer DNS nie rozpoznaje tej domeny. Problem z DNS hostingu.',
+            );
+        }
+
+        // 8. API connection test.
+        $api = new Rolmar_API_Client();
+        if ( $api->is_configured() ) {
+            $api_start = microtime( true );
+            $api_result = $api->test_connection();
+            $api_time = round( ( microtime( true ) - $api_start ) * 1000 );
+
+            if ( is_wp_error( $api_result ) ) {
+                $checks[] = array(
+                    'name'   => 'Polaczenie z API (getProducts)',
+                    'status' => 'error',
+                    'value'  => 'BLAD (' . $api_time . 'ms)',
+                    'hint'   => $api_result->get_error_message(),
+                );
+            } else {
+                $product_count = is_array( $api_result ) ? count( $api_result ) : 0;
+                $checks[] = array(
+                    'name'   => 'Polaczenie z API (getProducts)',
+                    'status' => 'ok',
+                    'value'  => 'OK — ' . $product_count . ' produktow (' . $api_time . 'ms)',
+                    'hint'   => '',
+                );
+            }
+
+            // 9. getPhotos API test.
+            $photos_start = microtime( true );
+            $photos_result = $api->get_photos();
+            $photos_time = round( ( microtime( true ) - $photos_start ) * 1000 );
+
+            if ( is_wp_error( $photos_result ) ) {
+                $checks[] = array(
+                    'name'   => 'API getPhotos',
+                    'status' => 'error',
+                    'value'  => 'BLAD (' . $photos_time . 'ms)',
+                    'hint'   => $photos_result->get_error_message(),
+                );
+            } else {
+                $photo_count = is_array( $photos_result ) ? count( $photos_result ) : 0;
+
+                // Analyze photo data structure.
+                $with_photos = 0;
+                $without_photos = 0;
+                $sample_keys = array();
+                if ( is_array( $photos_result ) && ! empty( $photos_result ) ) {
+                    $sample_keys = array_keys( $photos_result[0] );
+                    foreach ( $photos_result as $p ) {
+                        if ( isset( $p['Photo'] ) && is_array( $p['Photo'] ) && ! empty( $p['Photo'] ) ) {
+                            $with_photos++;
+                        } else {
+                            $without_photos++;
+                        }
+                    }
+                }
+
+                $checks[] = array(
+                    'name'   => 'API getPhotos',
+                    'status' => $photo_count > 0 ? 'ok' : 'warning',
+                    'value'  => $photo_count . ' wpisow (' . $photos_time . 'ms) | Ze zdjeciami: ' . $with_photos . ' | Bez: ' . $without_photos,
+                    'hint'   => ! empty( $sample_keys ) ? 'Struktura: ' . implode( ', ', $sample_keys ) : 'API nie zwraca zadnych zdjec.',
+                );
+                $photos_data = $photos_result;
+            }
+        } else {
+            $checks[] = array(
+                'name'   => 'Polaczenie z API',
+                'status' => 'warning',
+                'value'  => 'Pominieto — brak klucza API',
+                'hint'   => '',
+            );
+        }
+
+        // =====================================================================
+        // SEKCJA 3: SERWER ZDJEC — TESTY ROZNYCH WARIANTOW
+        // =====================================================================
+
+        // 10. Photo server — multiple access methods.
+        $photo_server_tests = array(
+            array(
+                'label'  => 'HTTPS GET (bez SSL verify)',
+                'url'    => 'https://photo2.rol-mar.com.pl/',
+                'method' => 'GET',
+                'args'   => array( 'timeout' => 10, 'sslverify' => false ),
+            ),
+            array(
+                'label'  => 'HTTPS GET (z SSL verify)',
+                'url'    => 'https://photo2.rol-mar.com.pl/',
+                'method' => 'GET',
+                'args'   => array( 'timeout' => 10, 'sslverify' => true ),
+            ),
+            array(
+                'label'  => 'HTTP GET (bez SSL)',
+                'url'    => 'http://photo2.rol-mar.com.pl/',
+                'method' => 'GET',
+                'args'   => array( 'timeout' => 10, 'sslverify' => false ),
+            ),
+            array(
+                'label'  => 'HTTPS + wsKey header',
+                'url'    => 'https://photo2.rol-mar.com.pl/',
+                'method' => 'GET',
+                'args'   => array(
+                    'timeout'   => 10,
+                    'sslverify' => false,
+                    'headers'   => array( 'wsKey' => $api_key ),
+                ),
+            ),
+        );
+
+        $server_results = array();
+        $any_server_ok = false;
+        foreach ( $photo_server_tests as $test ) {
+            if ( 'GET' === $test['method'] ) {
+                $resp = wp_remote_get( $test['url'], $test['args'] );
+            } else {
+                $resp = wp_remote_head( $test['url'], $test['args'] );
+            }
+
+            if ( is_wp_error( $resp ) ) {
+                $server_results[] = $test['label'] . ': BLAD — ' . $resp->get_error_message();
+            } else {
+                $code = wp_remote_retrieve_response_code( $resp );
+                $server_results[] = $test['label'] . ': HTTP ' . $code;
+                if ( $code >= 200 && $code < 500 ) {
+                    $any_server_ok = true;
+                }
+            }
+        }
+
+        $checks[] = array(
+            'name'   => 'Serwer zdjec — test dostepu',
+            'status' => $any_server_ok ? 'ok' : 'error',
+            'value'  => $any_server_ok ? 'Serwer odpowiada' : 'BRAK DOSTEPU do photo2.rol-mar.com.pl',
+            'hint'   => implode( ' | ', $server_results ),
+        );
+
+        // 11. SSL certificate check for photo server.
+        $ssl_check = wp_remote_get( 'https://photo2.rol-mar.com.pl/', array(
+            'timeout'   => 10,
+            'sslverify' => true,
+        ) );
+        if ( is_wp_error( $ssl_check ) ) {
+            $ssl_error = $ssl_check->get_error_message();
+            $is_ssl_error = ( strpos( $ssl_error, 'SSL' ) !== false || strpos( $ssl_error, 'certificate' ) !== false || strpos( $ssl_error, 'ssl' ) !== false );
+            $checks[] = array(
+                'name'   => 'SSL certyfikat photo2',
+                'status' => $is_ssl_error ? 'warning' : 'info',
+                'value'  => $is_ssl_error ? 'Problem z certyfikatem SSL' : 'Blad: ' . $ssl_error,
+                'hint'   => $is_ssl_error ? 'Uzywamy sslverify=false jako obejscie. Blad: ' . $ssl_error : '',
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'SSL certyfikat photo2',
+                'status' => 'ok',
+                'value'  => 'Certyfikat poprawny',
+                'hint'   => '',
+            );
+        }
+
+        // 12–13. Test real photo URLs — try MULTIPLE variants of a single photo.
+        $photo_test_url_raw = '';
+        $photo_test_sku = '';
+        if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
+            foreach ( $photos_data as $item ) {
+                if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) && ! empty( $item['Photo'][0] ) ) {
+                    $photo_test_url_raw = $item['Photo'][0];
+                    $photo_test_sku = isset( $item['Index'] ) ? $item['Index'] : 'N/A';
+                    break;
+                }
+            }
+        }
+
+        if ( ! empty( $photo_test_url_raw ) ) {
+            $clean_url = $this->clean_photo_url( $photo_test_url_raw );
+
+            // Build all possible URL variants to test.
+            $url_variants = array();
+            $url_variants['Oryginalny URL z API'] = rtrim( $photo_test_url_raw, '. ' );
+            if ( $clean_url !== $url_variants['Oryginalny URL z API'] ) {
+                $url_variants['Oczyszczony URL (bez c=)'] = $clean_url;
+            }
+            // HTTP variant.
+            if ( strpos( $clean_url, 'https://' ) === 0 ) {
+                $url_variants['HTTP zamiast HTTPS'] = str_replace( 'https://', 'http://', $clean_url );
+            }
+            // Without query string entirely.
+            $no_qs = strtok( $clean_url, '?' );
+            if ( $no_qs !== $clean_url ) {
+                $url_variants['Bez query string'] = $no_qs;
+            }
+
+            $variant_results = array();
+            $any_photo_ok = false;
+            $working_variant = '';
+
+            foreach ( $url_variants as $label => $url ) {
+                if ( empty( $url ) || ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+                    $variant_results[] = $label . ': niepoprawny URL';
+                    continue;
+                }
+
+                // Test each URL with different header combinations.
+                $header_combos = array(
+                    'bez naglowkow' => array(),
+                    'z wsKey'       => array( 'wsKey' => $api_key ),
+                    'z Referer'     => array( 'Referer' => 'https://www.rol-mar.com.pl/' ),
+                    'wsKey+Referer' => array( 'wsKey' => $api_key, 'Referer' => 'https://www.rol-mar.com.pl/' ),
+                );
+
+                foreach ( $header_combos as $h_label => $headers ) {
+                    $test_resp = wp_remote_get( $url, array(
+                        'timeout'   => 10,
+                        'sslverify' => false,
+                        'headers'   => $headers,
+                    ) );
+
+                    if ( is_wp_error( $test_resp ) ) {
+                        $variant_results[] = $label . ' (' . $h_label . '): BLAD — ' . $test_resp->get_error_message();
+                    } else {
+                        $v_code = wp_remote_retrieve_response_code( $test_resp );
+                        $v_type = wp_remote_retrieve_header( $test_resp, 'content-type' );
+                        $v_len  = wp_remote_retrieve_header( $test_resp, 'content-length' );
+                        $v_body_len = strlen( wp_remote_retrieve_body( $test_resp ) );
+
+                        $v_detail = 'HTTP ' . $v_code;
+                        if ( $v_type ) {
+                            $v_detail .= ', ' . $v_type;
+                        }
+                        if ( $v_len ) {
+                            $v_detail .= ', ' . round( intval( $v_len ) / 1024 ) . 'KB';
+                        } elseif ( $v_body_len > 0 ) {
+                            $v_detail .= ', body=' . round( $v_body_len / 1024 ) . 'KB';
+                        }
+
+                        $variant_results[] = $label . ' (' . $h_label . '): ' . $v_detail;
+
+                        if ( 200 === $v_code && $v_body_len > 100 ) {
+                            $any_photo_ok = true;
+                            if ( empty( $working_variant ) ) {
+                                $working_variant = $label . ' (' . $h_label . ')';
+                            }
+                            break 2; // Found working combo, stop testing.
+                        }
+                    }
+                }
+            }
+
+            $checks[] = array(
+                'name'   => 'Test zdjecia SKU: ' . $photo_test_sku,
+                'status' => $any_photo_ok ? 'ok' : 'error',
+                'value'  => $any_photo_ok ? 'DZIALA! Wariant: ' . $working_variant : 'ZADEN wariant nie dziala',
+                'hint'   => 'Oryginalny URL: ' . $photo_test_url_raw,
+            );
+
+            $checks[] = array(
+                'name'   => 'Szczegoly testow URL',
+                'status' => $any_photo_ok ? 'ok' : 'error',
+                'value'  => count( $variant_results ) . ' testow wykonanych',
+                'hint'   => implode( ' || ', $variant_results ),
+            );
+
+            // 14. If photo works — try downloading and saving to uploads.
+            if ( $any_photo_ok ) {
+                $download_url = $clean_url;
+                $tmp = download_url( $download_url, 15 );
+                if ( is_wp_error( $tmp ) ) {
+                    $checks[] = array(
+                        'name'   => 'Zapis zdjecia do uploads',
+                        'status' => 'error',
+                        'value'  => 'download_url() BLAD',
+                        'hint'   => $tmp->get_error_message(),
+                    );
+                } else {
+                    $tmp_size = @filesize( $tmp );
+                    @unlink( $tmp );
+                    $checks[] = array(
+                        'name'   => 'Zapis zdjecia do uploads',
+                        'status' => 'ok',
+                        'value'  => 'OK — pobrano ' . round( $tmp_size / 1024 ) . ' KB do pliku tymczasowego',
+                        'hint'   => 'download_url() dziala poprawnie. Sync zdjec powinien dzialac.',
+                    );
+                }
+            }
+        } else {
+            $checks[] = array(
+                'name'   => 'Test zdjecia',
+                'status' => 'warning',
+                'value'  => 'Brak URL do testu',
+                'hint'   => 'getPhotos nie zwrocilo zadnych URL-i zdjec do przetestowania.',
+            );
+        }
+
+        // =====================================================================
+        // SEKCJA 4: WOOCOMMERCE
+        // =====================================================================
+
+        // 15. WooCommerce products count + image stats.
+        $wc_total = 0;
+        $wc_with_images = 0;
+        $wc_without_images = 0;
+        $wc_with_gallery = 0;
+        if ( function_exists( 'wc_get_products' ) ) {
+            $wc_ids = wc_get_products( array(
+                'limit'  => -1,
+                'status' => 'publish',
+                'return' => 'ids',
+            ) );
+            $wc_total = count( $wc_ids );
+
+            $check_ids = array_slice( $wc_ids, 0, 200 );
+            foreach ( $check_ids as $pid ) {
+                if ( get_post_thumbnail_id( $pid ) ) {
+                    $wc_with_images++;
+                    $gallery = get_post_meta( $pid, '_product_image_gallery', true );
+                    if ( ! empty( $gallery ) ) {
+                        $wc_with_gallery++;
+                    }
+                } else {
+                    $wc_without_images++;
+                }
+            }
+
+            $sample_note = $wc_total > 200 ? ' (sprawdzono pierwsze 200)' : '';
+            $checks[] = array(
+                'name'   => 'Produkty WooCommerce',
+                'status' => $wc_total > 0 ? 'ok' : 'warning',
+                'value'  => $wc_total . ' opublikowanych',
+                'hint'   => 'Ze zdjeciem glownym: ' . $wc_with_images . ' | Z galeria: ' . $wc_with_gallery . ' | Bez zdjec: ' . $wc_without_images . $sample_note,
+            );
+
+            // 16. Match WooCommerce products with getPhotos data.
+            if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
+                $photo_index_keys = array();
+                foreach ( $photos_data as $p_item ) {
+                    $p_id = isset( $p_item['Index'] ) ? $p_item['Index'] : '';
+                    if ( $p_id ) {
+                        $photo_index_keys[ $p_id ] = true;
+                    }
+                }
+
+                $matched = 0;
+                $unmatched = 0;
+                $sample_unmatched = array();
+                $sample_products = wc_get_products( array(
+                    'limit'  => 50,
+                    'status' => 'publish',
+                    'orderby' => 'date',
+                    'order'   => 'DESC',
+                ) );
+
+                foreach ( $sample_products as $wc_p ) {
+                    $sku = $wc_p->get_sku();
+                    if ( empty( $sku ) ) {
+                        continue;
+                    }
+                    if ( isset( $photo_index_keys[ $sku ] ) ) {
+                        $matched++;
+                    } else {
+                        $unmatched++;
+                        if ( count( $sample_unmatched ) < 5 ) {
+                            $sample_unmatched[] = $sku;
+                        }
+                    }
+                }
+
+                $checks[] = array(
+                    'name'   => 'Dopasowanie SKU do getPhotos',
+                    'status' => $matched > 0 ? 'ok' : 'error',
+                    'value'  => 'Dopasowane: ' . $matched . '/' . ( $matched + $unmatched ) . ' (z 50 sprawdzonych)',
+                    'hint'   => $unmatched > 0 && ! empty( $sample_unmatched ) ? 'Nie znalezione SKU: ' . implode( ', ', $sample_unmatched ) : 'Wszystkie sprawdzone SKU maja zdjecia w API.',
+                );
+            }
+        } else {
+            $checks[] = array(
+                'name'   => 'WooCommerce',
+                'status' => 'error',
+                'value'  => 'Nieaktywne',
+                'hint'   => 'WooCommerce nie jest aktywne.',
+            );
+        }
+
+        // =====================================================================
+        // SEKCJA 5: KONFIGURACJA I STATUS
+        // =====================================================================
+
+        // 17. Plugin configuration summary.
+        $env = get_option( 'rolmar_api_environment', 'production' );
+        $freq = get_option( 'rolmar_sync_frequency', 'daily' );
+        $import_images = get_option( 'rolmar_import_images', 'yes' );
+        $batch_size = get_option( 'rolmar_batch_size', 50 );
+        $discount = get_option( 'rolmar_discount_percent', 0 );
+        $allowed_cats = get_option( 'rolmar_allowed_categories', '[]' );
+        $cats_count = 0;
+        $cats_arr = json_decode( $allowed_cats, true );
+        if ( is_array( $cats_arr ) ) {
+            $cats_count = count( $cats_arr );
+        }
+        $checks[] = array(
+            'name'   => 'Konfiguracja pluginu',
+            'status' => 'info',
+            'value'  => 'Srodowisko: ' . $env . ' | Czestotliwosc: ' . $freq . ' | Batch: ' . $batch_size,
+            'hint'   => 'Import zdjec: ' . $import_images . ' | Rabat: ' . $discount . '% | Filtry kategorii: ' . ( $cats_count > 0 ? $cats_count . ' wybranych' : 'brak (wszystkie)' ),
+        );
+
+        // 18. Last sync timestamps.
+        $last_product = get_option( 'rolmar_last_product_sync', '' );
+        $last_stock   = get_option( 'rolmar_last_stock_sync', '' );
+        $last_photo   = get_option( 'rolmar_last_photo_sync', '' );
+        $checks[] = array(
+            'name'   => 'Ostatnie synchronizacje',
+            'status' => 'info',
+            'value'  => 'Produkty: ' . ( $last_product ?: 'nigdy' ),
+            'hint'   => 'Stany: ' . ( $last_stock ?: 'nigdy' ) . ' | Zdjecia: ' . ( $last_photo ?: 'nigdy' ),
+        );
+
+        // 19. WP Cron status.
+        $cron_disabled = defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON;
+        $next_product_sync = wp_next_scheduled( 'rolmar_cron_products' );
+        $next_stock_sync   = wp_next_scheduled( 'rolmar_cron_stock' );
+
+        $cron_detail = 'WP_CRON: ' . ( $cron_disabled ? 'WYLACZONY' : 'aktywny' );
+        if ( $next_product_sync ) {
+            $cron_detail .= ' | Nast. produkty: ' . date_i18n( 'Y-m-d H:i:s', $next_product_sync );
+        }
+        if ( $next_stock_sync ) {
+            $cron_detail .= ' | Nast. stany: ' . date_i18n( 'Y-m-d H:i:s', $next_stock_sync );
+        }
+        $checks[] = array(
+            'name'   => 'WP Cron (auto-sync)',
+            'status' => $cron_disabled ? 'warning' : 'ok',
+            'value'  => $cron_detail,
+            'hint'   => $cron_disabled ? 'DISABLE_WP_CRON jest wlaczony. Automatyczna synchronizacja nie bedzie dzialac bez zewnetrznego crona.' : '',
+        );
+
+        // 20. Sync lock check.
+        $sync_lock = get_transient( 'rolmar_sync_in_progress' );
+        if ( $sync_lock ) {
+            $checks[] = array(
+                'name'   => 'Blokada synchronizacji',
+                'status' => 'warning',
+                'value'  => 'Aktywna blokada: ' . $sync_lock,
+                'hint'   => 'Jesli synchronizacja sie zawiesi, blokada wygasnie automatycznie po godzinie.',
+            );
+        }
+
+        wp_send_json_success( array( 'checks' => $checks ) );
     }
 
     /**
