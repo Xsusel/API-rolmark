@@ -1399,7 +1399,17 @@ class Rolmar_Admin {
                 if ( is_array( $photos_result ) && ! empty( $photos_result ) ) {
                     $sample_keys = array_keys( $photos_result[0] );
                     foreach ( $photos_result as $p ) {
+                        $has_photo = false;
                         if ( isset( $p['Photo'] ) && is_array( $p['Photo'] ) && ! empty( $p['Photo'] ) ) {
+                            $has_photo = true;
+                        } elseif ( isset( $p['Photo'] ) && ! empty( $p['Photo'] ) ) {
+                            $has_photo = true;
+                        } elseif ( isset( $p['url'] ) && ! empty( $p['url'] ) ) {
+                            $has_photo = true;
+                        } elseif ( isset( $p['photo'] ) && ! empty( $p['photo'] ) ) {
+                            $has_photo = true;
+                        }
+                        if ( $has_photo ) {
                             $with_photos++;
                         } else {
                             $without_photos++;
@@ -1518,9 +1528,27 @@ class Rolmar_Admin {
         $photo_test_sku = '';
         if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
             foreach ( $photos_data as $item ) {
+                // Extract photo URL — handle all known field variants.
+                $test_url = '';
                 if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) && ! empty( $item['Photo'][0] ) ) {
-                    $photo_test_url_raw = $item['Photo'][0];
-                    $photo_test_sku = isset( $item['Index'] ) ? $item['Index'] : 'N/A';
+                    $test_url = $item['Photo'][0];
+                } elseif ( isset( $item['Photo'] ) && is_string( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                    $test_url = $item['Photo'];
+                } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                    $test_url = $item['url'];
+                } elseif ( isset( $item['photo'] ) && ! empty( $item['photo'] ) ) {
+                    $test_url = $item['photo'];
+                }
+
+                if ( ! empty( $test_url ) ) {
+                    $photo_test_url_raw = $test_url;
+                    if ( isset( $item['Index'] ) ) {
+                        $photo_test_sku = $item['Index'];
+                    } elseif ( isset( $item['index'] ) ) {
+                        $photo_test_sku = $item['index'];
+                    } else {
+                        $photo_test_sku = 'N/A';
+                    }
                     break;
                 }
             }
@@ -1688,7 +1716,14 @@ class Rolmar_Admin {
             if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
                 $photo_index_keys = array();
                 foreach ( $photos_data as $p_item ) {
-                    $p_id = isset( $p_item['Index'] ) ? $p_item['Index'] : '';
+                    $p_id = '';
+                    if ( isset( $p_item['Index'] ) ) {
+                        $p_id = $p_item['Index'];
+                    } elseif ( isset( $p_item['productIndex'] ) ) {
+                        $p_id = $p_item['productIndex'];
+                    } elseif ( isset( $p_item['index'] ) ) {
+                        $p_id = $p_item['index'];
+                    }
                     if ( $p_id ) {
                         $photo_index_keys[ $p_id ] = true;
                     }
