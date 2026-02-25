@@ -1410,32 +1410,28 @@ class Rolmar_Admin {
         // SEKCJA 3: SERWER ZDJEC — TESTY ROZNYCH WARIANTOW
         // =====================================================================
 
-        // 10. Photo server — multiple access methods.
+        // 10. Photo server — multiple access methods (short timeouts to avoid AJAX timeout).
         $photo_server_tests = array(
             array(
-                'label'  => 'HTTPS GET (bez SSL verify)',
+                'label'  => 'HTTPS (bez SSL verify)',
                 'url'    => 'https://photo2.rol-mar.com.pl/',
-                'method' => 'GET',
-                'args'   => array( 'timeout' => 10, 'sslverify' => false ),
+                'args'   => array( 'timeout' => 5, 'sslverify' => false ),
             ),
             array(
-                'label'  => 'HTTPS GET (z SSL verify)',
+                'label'  => 'HTTPS (z SSL verify)',
                 'url'    => 'https://photo2.rol-mar.com.pl/',
-                'method' => 'GET',
-                'args'   => array( 'timeout' => 10, 'sslverify' => true ),
+                'args'   => array( 'timeout' => 5, 'sslverify' => true ),
             ),
             array(
-                'label'  => 'HTTP GET (bez SSL)',
+                'label'  => 'HTTP',
                 'url'    => 'http://photo2.rol-mar.com.pl/',
-                'method' => 'GET',
-                'args'   => array( 'timeout' => 10, 'sslverify' => false ),
+                'args'   => array( 'timeout' => 5, 'sslverify' => false ),
             ),
             array(
-                'label'  => 'HTTPS + wsKey header',
+                'label'  => 'HTTPS + wsKey',
                 'url'    => 'https://photo2.rol-mar.com.pl/',
-                'method' => 'GET',
                 'args'   => array(
-                    'timeout'   => 10,
+                    'timeout'   => 5,
                     'sslverify' => false,
                     'headers'   => array( 'wsKey' => $api_key ),
                 ),
@@ -1444,20 +1440,26 @@ class Rolmar_Admin {
 
         $server_results = array();
         $any_server_ok = false;
+        $ssl_ok = null;
         foreach ( $photo_server_tests as $test ) {
-            if ( 'GET' === $test['method'] ) {
-                $resp = wp_remote_get( $test['url'], $test['args'] );
-            } else {
-                $resp = wp_remote_head( $test['url'], $test['args'] );
-            }
+            $resp = wp_remote_get( $test['url'], $test['args'] );
 
             if ( is_wp_error( $resp ) ) {
-                $server_results[] = $test['label'] . ': BLAD — ' . $resp->get_error_message();
+                $err_msg = $resp->get_error_message();
+                $server_results[] = $test['label'] . ': BLAD — ' . $err_msg;
+                // Detect SSL issue from the SSL-verify test.
+                if ( strpos( $test['label'], 'z SSL verify' ) !== false ) {
+                    $ssl_ok = false;
+                    $ssl_error_msg = $err_msg;
+                }
             } else {
                 $code = wp_remote_retrieve_response_code( $resp );
                 $server_results[] = $test['label'] . ': HTTP ' . $code;
                 if ( $code >= 200 && $code < 500 ) {
                     $any_server_ok = true;
+                }
+                if ( strpos( $test['label'], 'z SSL verify' ) !== false ) {
+                    $ssl_ok = true;
                 }
             }
         }
@@ -1469,26 +1471,27 @@ class Rolmar_Admin {
             'hint'   => implode( ' | ', $server_results ),
         );
 
-        // 11. SSL certificate check for photo server.
-        $ssl_check = wp_remote_get( 'https://photo2.rol-mar.com.pl/', array(
-            'timeout'   => 10,
-            'sslverify' => true,
-        ) );
-        if ( is_wp_error( $ssl_check ) ) {
-            $ssl_error = $ssl_check->get_error_message();
-            $is_ssl_error = ( strpos( $ssl_error, 'SSL' ) !== false || strpos( $ssl_error, 'certificate' ) !== false || strpos( $ssl_error, 'ssl' ) !== false );
+        // 11. SSL certificate result (from the test above, no extra request needed).
+        if ( null === $ssl_ok ) {
             $checks[] = array(
                 'name'   => 'SSL certyfikat photo2',
-                'status' => $is_ssl_error ? 'warning' : 'info',
-                'value'  => $is_ssl_error ? 'Problem z certyfikatem SSL' : 'Blad: ' . $ssl_error,
-                'hint'   => $is_ssl_error ? 'Uzywamy sslverify=false jako obejscie. Blad: ' . $ssl_error : '',
+                'status' => 'info',
+                'value'  => 'Nie sprawdzono',
+                'hint'   => '',
             );
-        } else {
+        } elseif ( $ssl_ok ) {
             $checks[] = array(
                 'name'   => 'SSL certyfikat photo2',
                 'status' => 'ok',
                 'value'  => 'Certyfikat poprawny',
                 'hint'   => '',
+            );
+        } else {
+            $checks[] = array(
+                'name'   => 'SSL certyfikat photo2',
+                'status' => 'warning',
+                'value'  => 'Problem z certyfikatem SSL',
+                'hint'   => 'Uzywamy sslverify=false jako obejscie. ' . ( isset( $ssl_error_msg ) ? 'Blad: ' . $ssl_error_msg : '' ),
             );
         }
 
@@ -1534,7 +1537,7 @@ class Rolmar_Admin {
                     continue;
                 }
 
-                // Test each URL with different header combinations.
+                // Test each URL with different header combinations (short timeouts).
                 $header_combos = array(
                     'bez naglowkow' => array(),
                     'z wsKey'       => array( 'wsKey' => $api_key ),
@@ -1544,7 +1547,7 @@ class Rolmar_Admin {
 
                 foreach ( $header_combos as $h_label => $headers ) {
                     $test_resp = wp_remote_get( $url, array(
-                        'timeout'   => 10,
+                        'timeout'   => 5,
                         'sslverify' => false,
                         'headers'   => $headers,
                     ) );
@@ -1597,7 +1600,7 @@ class Rolmar_Admin {
             // 14. If photo works — try downloading and saving to uploads.
             if ( $any_photo_ok ) {
                 $download_url = $clean_url;
-                $tmp = download_url( $download_url, 15 );
+                $tmp = download_url( $download_url, 10 );
                 if ( is_wp_error( $tmp ) ) {
                     $checks[] = array(
                         'name'   => 'Zapis zdjecia do uploads',

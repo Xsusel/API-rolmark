@@ -385,12 +385,17 @@
         var $result = $('#rolmar-diagnostics-result');
 
         $btn.prop('disabled', true).text('Diagnostyka w toku...');
-        $result.html('<div class="rolmar-diag-loading"><span class="spinner is-active" style="float:none; margin:0 8px 0 0;"></span> Sprawdzanie... (moze to potrwac do 30s)</div>');
+        $result.html('<div class="rolmar-diag-loading"><span class="spinner is-active" style="float:none; margin:0 8px 0 0;"></span> Sprawdzanie... (moze to potrwac do 2 minut)</div>');
 
-        $.post(rolmarAdmin.ajaxUrl, {
-            action: 'rolmar_run_diagnostics',
-            nonce: rolmarAdmin.nonce
-        }, function (response) {
+        $.ajax({
+            url: rolmarAdmin.ajaxUrl,
+            type: 'POST',
+            timeout: 120000, // 2 minutes — diagnostics makes many external HTTP requests
+            data: {
+                action: 'rolmar_run_diagnostics',
+                nonce: rolmarAdmin.nonce
+            },
+            success: function (response) {
             $btn.prop('disabled', false).text('Uruchom diagnostyke');
 
             if (response.success && response.data.checks) {
@@ -473,9 +478,19 @@
             } else {
                 $result.html('<div class="notice notice-error"><p>Blad: ' + (response.data.message || 'Nieznany blad') + '</p></div>');
             }
-        }).fail(function () {
-            $btn.prop('disabled', false).text('Uruchom diagnostyke');
-            $result.html('<div class="notice notice-error"><p>Blad polaczenia z serwerem.</p></div>');
+            },
+            error: function (jqXHR, textStatus, errorThrown) {
+                $btn.prop('disabled', false).text('Uruchom diagnostyke');
+                var msg = 'Blad polaczenia z serwerem.';
+                if (textStatus === 'timeout') {
+                    msg = 'Przekroczono czas oczekiwania (120s). Serwer moze miec problemy z polaczeniami wychodzacymi — kazdy test czeka na odpowiedz zewnetrzna.';
+                } else if (textStatus === 'error' && jqXHR.status) {
+                    msg = 'Blad HTTP ' + jqXHR.status + ': ' + errorThrown;
+                } else if (textStatus === 'parsererror') {
+                    msg = 'Serwer zwrocil nieprawidlowa odpowiedz (parsererror). Sprawdz logi PHP.';
+                }
+                $result.html('<div class="notice notice-error"><p>' + msg + '</p></div>');
+            }
         });
     });
 
