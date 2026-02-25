@@ -437,8 +437,16 @@
                     html += '<tr class="' + rowClass + '">';
                     html += '<td style="text-align:center;">' + icon + '</td>';
                     html += '<td><strong>' + check.name + '</strong></td>';
-                    html += '<td>' + check.value + '</td>';
-                    html += '<td style="color:#666; font-size:12px;">' + (check.hint || '') + '</td>';
+                    html += '<td style="max-width:350px; word-break:break-word;">' + check.value + '</td>';
+                    // If hint is very long (URL test details), make it expandable.
+                    var hintHtml = check.hint || '';
+                    if (hintHtml.length > 120) {
+                        var shortHint = hintHtml.substring(0, 100) + '...';
+                        hintHtml = '<span class="rolmar-diag-hint-short">' + shortHint + '</span>';
+                        hintHtml += '<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:11px;color:#0073aa;">Pokaz szczegoly</summary>';
+                        hintHtml += '<div style="margin-top:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all;background:#f9f9f9;padding:8px;border:1px solid #e0e0e0;border-radius:3px;">' + (check.hint || '').replace(/ \|\| /g, '\n') + '</div></details>';
+                    }
+                    html += '<td style="color:#666; font-size:12px; max-width:300px;">' + hintHtml + '</td>';
                     html += '</tr>';
                 });
 
