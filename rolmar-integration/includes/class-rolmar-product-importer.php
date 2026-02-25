@@ -586,9 +586,11 @@ class Rolmar_Product_Importer {
             Rolmar_Logger::info( "Attempting to download image for {$sku} from: {$try_url}", 'import' );
 
             // Use wp_remote_get with auth headers (photo server may require them).
+            // sslverify disabled because photo2.rol-mar.com.pl is behind Cloudflare.
             $response = wp_remote_get( $try_url, array(
-                'timeout' => 30,
-                'headers' => array(
+                'timeout'   => 30,
+                'sslverify' => false,
+                'headers'   => array(
                     'wsKey'   => $api_key,
                     'Referer' => 'https://www.rol-mar.com.pl/',
                 ),
