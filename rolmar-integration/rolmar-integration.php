@@ -3,7 +3,7 @@
  * Plugin Name: Rolmar Integration for WooCommerce
  * Plugin URI: 
  * Description: Integracja WooCommerce z API hurtowni Rolmar - import produktów, synchronizacja stanów magazynowych i zdjęć.
- * Version: 1.0.11
+ * Version: 1.1.0
  * Author: Jakub Wcisło
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'ROLMAR_PLUGIN_VERSION', '1.0.11' );
+define( 'ROLMAR_PLUGIN_VERSION', '1.1.0' );
 define( 'ROLMAR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ROLMAR_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'ROLMAR_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
@@ -55,6 +55,33 @@ final class Rolmar_Integration {
 
         add_action( 'admin_init', array( $this, 'check_woocommerce' ) );
         add_action( 'init', array( $this, 'init' ) );
+
+        // Ensure WordPress allows WebP uploads (photos are converted to WebP).
+        add_filter( 'upload_mimes', array( $this, 'allow_webp_upload' ) );
+        add_filter( 'wp_check_filetype_and_ext', array( $this, 'fix_webp_filetype' ), 10, 5 );
+    }
+
+    /**
+     * Allow WebP MIME type in WordPress uploads.
+     */
+    public function allow_webp_upload( $mimes ) {
+        $mimes['webp'] = 'image/webp';
+        return $mimes;
+    }
+
+    /**
+     * Fix WebP file type detection for programmatic uploads.
+     */
+    public function fix_webp_filetype( $data, $file, $filename, $mimes, $real_mime = '' ) {
+        if ( ! empty( $data['ext'] ) && ! empty( $data['type'] ) ) {
+            return $data;
+        }
+        $ext = pathinfo( $filename, PATHINFO_EXTENSION );
+        if ( 'webp' === strtolower( $ext ) ) {
+            $data['ext']  = 'webp';
+            $data['type'] = 'image/webp';
+        }
+        return $data;
     }
 
     public function init() {
