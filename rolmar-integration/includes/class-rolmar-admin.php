@@ -1524,33 +1524,76 @@ class Rolmar_Admin {
         }
 
         // 12–13. Test real photo URLs — try MULTIPLE variants of a single photo.
+        // Prefer testing a photo URL for a SKU that actually exists in WooCommerce.
         $photo_test_url_raw = '';
         $photo_test_sku = '';
         if ( ! empty( $photos_data ) && is_array( $photos_data ) ) {
+            // Build a lookup: SKU => photo URL (first occurrence).
+            $photo_url_by_sku = array();
+            $first_url = '';
+            $first_sku = '';
             foreach ( $photos_data as $item ) {
-                // Extract photo URL — handle all known field variants.
-                $test_url = '';
+                $item_url = '';
                 if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) && ! empty( $item['Photo'][0] ) ) {
-                    $test_url = $item['Photo'][0];
+                    $item_url = $item['Photo'][0];
                 } elseif ( isset( $item['Photo'] ) && is_string( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
-                    $test_url = $item['Photo'];
+                    $item_url = $item['Photo'];
                 } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
-                    $test_url = $item['url'];
+                    $item_url = $item['url'];
                 } elseif ( isset( $item['photo'] ) && ! empty( $item['photo'] ) ) {
-                    $test_url = $item['photo'];
+                    $item_url = $item['photo'];
+                }
+                if ( empty( $item_url ) ) {
+                    continue;
                 }
 
-                if ( ! empty( $test_url ) ) {
-                    $photo_test_url_raw = $test_url;
-                    if ( isset( $item['Index'] ) ) {
-                        $photo_test_sku = $item['Index'];
-                    } elseif ( isset( $item['index'] ) ) {
-                        $photo_test_sku = $item['index'];
-                    } else {
-                        $photo_test_sku = 'N/A';
-                    }
+                $item_sku = '';
+                if ( isset( $item['Index'] ) ) {
+                    $item_sku = $item['Index'];
+                } elseif ( isset( $item['index'] ) ) {
+                    $item_sku = $item['index'];
+                } elseif ( isset( $item['productIndex'] ) ) {
+                    $item_sku = $item['productIndex'];
+                }
+
+                // Remember the very first entry as fallback.
+                if ( empty( $first_url ) ) {
+                    $first_url = $item_url;
+                    $first_sku = $item_sku ?: 'N/A';
+                }
+
+                if ( ! empty( $item_sku ) && ! isset( $photo_url_by_sku[ $item_sku ] ) ) {
+                    $photo_url_by_sku[ $item_sku ] = $item_url;
+                }
+
+                // Stop building index after 5000 entries to save time.
+                if ( count( $photo_url_by_sku ) >= 5000 ) {
                     break;
                 }
+            }
+
+            // Try to find a matching WooCommerce product SKU for more realistic test.
+            if ( class_exists( 'WooCommerce' ) && ! empty( $photo_url_by_sku ) ) {
+                $test_products = wc_get_products( array(
+                    'limit'  => 10,
+                    'status' => 'publish',
+                    'orderby' => 'date',
+                    'order'   => 'DESC',
+                ) );
+                foreach ( $test_products as $tp ) {
+                    $tp_sku = $tp->get_sku();
+                    if ( ! empty( $tp_sku ) && isset( $photo_url_by_sku[ $tp_sku ] ) ) {
+                        $photo_test_url_raw = $photo_url_by_sku[ $tp_sku ];
+                        $photo_test_sku = $tp_sku;
+                        break;
+                    }
+                }
+            }
+
+            // Fallback to first available photo entry.
+            if ( empty( $photo_test_url_raw ) && ! empty( $first_url ) ) {
+                $photo_test_url_raw = $first_url;
+                $photo_test_sku = $first_sku;
             }
         }
 
