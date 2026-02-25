@@ -1177,6 +1177,24 @@ class Rolmar_Admin {
 
         @set_time_limit( 120 );
 
+        // Ensure file.php is loaded for download_url().
+        if ( ! function_exists( 'download_url' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+
+        try {
+            $this->run_diagnostics_checks();
+        } catch ( \Exception $e ) {
+            wp_send_json_error( array( 'message' => 'Blad diagnostyki: ' . $e->getMessage() ) );
+        } catch ( \Error $e ) {
+            wp_send_json_error( array( 'message' => 'Blad krytyczny: ' . $e->getMessage() . ' w ' . $e->getFile() . ':' . $e->getLine() ) );
+        }
+    }
+
+    /**
+     * Run all diagnostic checks.
+     */
+    private function run_diagnostics_checks() {
         $checks = array();
         $photos_data = null;
 
