@@ -1690,38 +1690,101 @@ class Rolmar_Admin {
                 'hint'   => implode( ' || ', $variant_results ),
             );
 
-            // 13b. If all fail — show the actual response body to help diagnose (IP block? wrong URL? server error?)
+            // 13b. If all fail — try "c=" param with different dimension values.
+            // The API returns "c=-bth.." where ".." may be placeholders for dimensions.
             if ( ! $any_photo_ok ) {
-                $diag_url = $no_qs ?: $clean_url; // simplest URL variant (no query string).
-                $diag_resp = wp_remote_get( $diag_url, array(
-                    'timeout'   => 5,
-                    'sslverify' => false,
-                    'headers'   => array( 'wsKey' => $api_key ),
-                ) );
-                $diag_body = '';
-                $diag_code = 0;
-                if ( ! is_wp_error( $diag_resp ) ) {
-                    $diag_code = wp_remote_retrieve_response_code( $diag_resp );
-                    $diag_body = wp_remote_retrieve_body( $diag_resp );
+                $base_photo_url = strtok( rtrim( $photo_test_url_raw, '. ' ), '?' );
+                // Extract "d" param value if present.
+                $d_param = '';
+                if ( preg_match( '/[?&]d=([^&]+)/', $photo_test_url_raw, $d_match ) ) {
+                    $d_param = $d_match[1];
                 }
 
-                // Extract useful text from HTML response.
-                $diag_text = '';
-                if ( ! empty( $diag_body ) ) {
-                    // Strip HTML tags, get first 300 chars.
-                    $diag_text = trim( wp_strip_all_tags( $diag_body ) );
-                    $diag_text = preg_replace( '/\s+/', ' ', $diag_text );
-                    if ( strlen( $diag_text ) > 300 ) {
-                        $diag_text = substr( $diag_text, 0, 300 ) . '...';
+                // Try different "c=" dimension patterns.
+                $c_variants = array(
+                    'bez parametrow'       => $base_photo_url,
+                    'd= tylko'             => $base_photo_url . ( $d_param ? '?d=' . $d_param : '' ),
+                    'c=-bth800.800'        => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth800.800',
+                    'c=-bth800x800'        => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth800x800',
+                    'c=-bth.800.800'       => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth.800.800',
+                    'c=-bth200.200'        => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth200.200',
+                    'c=-bth'               => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth',
+                    'c=bth800.800'         => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=bth800.800',
+                    'oryginalny c=-bth..'  => $base_photo_url . ( $d_param ? '?d=' . $d_param . '&' : '?' ) . 'c=-bth..',
+                );
+
+                $c_results = array();
+                $c_working = '';
+                foreach ( $c_variants as $c_label => $c_url ) {
+                    $c_resp = wp_remote_get( $c_url, array(
+                        'timeout'   => 5,
+                        'sslverify' => false,
+                        'headers'   => array(
+                            'wsKey'   => $api_key,
+                            'Referer' => 'https://www.rol-mar.com.pl/',
+                        ),
+                    ) );
+
+                    if ( is_wp_error( $c_resp ) ) {
+                        $c_results[] = $c_label . ': BLAD ' . $c_resp->get_error_message();
+                        continue;
+                    }
+
+                    $c_code = wp_remote_retrieve_response_code( $c_resp );
+                    $c_type = wp_remote_retrieve_header( $c_resp, 'content-type' );
+                    $c_size = strlen( wp_remote_retrieve_body( $c_resp ) );
+                    $c_results[] = $c_label . ': HTTP ' . $c_code . ' (' . $c_type . ', ' . round( $c_size / 1024, 1 ) . 'KB)';
+
+                    if ( 200 === $c_code && $c_size > 100 && strpos( $c_type, 'image' ) !== false ) {
+                        $c_working = $c_label . ' -> ' . $c_url;
+                        $any_photo_ok = true;
+                        break;
                     }
                 }
 
-                $checks[] = array(
-                    'name'   => 'Tresc odpowiedzi serwera zdjec',
-                    'status' => 'info',
-                    'value'  => 'HTTP ' . $diag_code . ' dla: ' . $diag_url,
-                    'hint'   => ! empty( $diag_text ) ? $diag_text : '(pusta odpowiedz)',
-                );
+                if ( ! empty( $c_working ) ) {
+                    $checks[] = array(
+                        'name'   => 'Test wymiarow w parametrze c=',
+                        'status' => 'ok',
+                        'value'  => 'DZIALA! ' . $c_working,
+                        'hint'   => implode( ' || ', $c_results ),
+                    );
+                } else {
+                    $checks[] = array(
+                        'name'   => 'Test wymiarow w parametrze c=',
+                        'status' => 'error',
+                        'value'  => 'Zadna kombinacja nie dziala',
+                        'hint'   => implode( ' || ', $c_results ),
+                    );
+
+                    // Show actual response body to help diagnose further.
+                    $diag_url = $base_photo_url;
+                    $diag_resp = wp_remote_get( $diag_url, array(
+                        'timeout'   => 5,
+                        'sslverify' => false,
+                        'headers'   => array( 'wsKey' => $api_key ),
+                    ) );
+                    $diag_body = '';
+                    $diag_code = 0;
+                    if ( ! is_wp_error( $diag_resp ) ) {
+                        $diag_code = wp_remote_retrieve_response_code( $diag_resp );
+                        $diag_body = wp_remote_retrieve_body( $diag_resp );
+                    }
+                    $diag_text = '';
+                    if ( ! empty( $diag_body ) ) {
+                        $diag_text = trim( wp_strip_all_tags( $diag_body ) );
+                        $diag_text = preg_replace( '/\s+/', ' ', $diag_text );
+                        if ( strlen( $diag_text ) > 300 ) {
+                            $diag_text = substr( $diag_text, 0, 300 ) . '...';
+                        }
+                    }
+                    $checks[] = array(
+                        'name'   => 'Tresc odpowiedzi serwera zdjec',
+                        'status' => 'info',
+                        'value'  => 'HTTP ' . $diag_code . ' dla: ' . $diag_url,
+                        'hint'   => ! empty( $diag_text ) ? $diag_text : '(pusta odpowiedz)',
+                    );
+                }
             }
 
             // 14. If photo works — try downloading and saving to uploads.
