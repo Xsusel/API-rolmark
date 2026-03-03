@@ -973,12 +973,12 @@ class Rolmar_Admin {
                     if ( empty( $variant_url ) || ! filter_var( $variant_url, FILTER_VALIDATE_URL ) ) {
                         continue;
                     }
-                    // Test with auth headers.
+                    // Test with auth headers (no Referer — photo server returns 404 when Referer is present).
                     $test_response = wp_remote_head( $variant_url, array(
-                        'timeout' => 10,
-                        'headers' => array(
-                            'wsKey'   => $api_key,
-                            'Referer' => 'https://www.rol-mar.com.pl/',
+                        'timeout'   => 10,
+                        'sslverify' => false,
+                        'headers'   => array(
+                            'wsKey' => $api_key,
                         ),
                     ) );
                     $variant_http = 0;
