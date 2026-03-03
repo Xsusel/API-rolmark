@@ -568,12 +568,12 @@ class Rolmar_Product_Importer {
         Rolmar_Logger::info( "Downloading image for {$sku} from: {$original_url}", 'import' );
 
         // sslverify disabled because photo2.rol-mar.com.pl is behind Cloudflare.
+        // Do NOT send Referer header — photo server returns 404 when Referer is present.
         $response = wp_remote_get( $original_url, array(
             'timeout'   => 30,
             'sslverify' => false,
             'headers'   => array(
-                'wsKey'   => $api_key,
-                'Referer' => 'https://www.rol-mar.com.pl/',
+                'wsKey' => $api_key,
             ),
         ) );
 
