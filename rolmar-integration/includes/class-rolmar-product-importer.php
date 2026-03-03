@@ -558,108 +558,104 @@ class Rolmar_Product_Importer {
         // by the photo server. Do NOT rtrim dots — they are part of the c= value.
         $original_url = trim( $url );
 
-        // Fallback without c= param (only if original fails).
-        $without_c_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
-        $without_c_url = rtrim( $without_c_url, '?&' );
-        $without_c_url = preg_replace( '/\?&/', '?', $without_c_url );
+        // Add cache-busting parameter to bypass Cloudflare cache.
+        // Without this, Cloudflare may serve cached 404 responses and the request
+        // never reaches the origin server (tech cannot see our IP in logs).
+        $cache_bust = '_nocache=' . time();
+        $download_url = $original_url . ( strpos( $original_url, '?' ) !== false ? '&' : '?' ) . $cache_bust;
 
-        // Fallback without any query params (last resort).
-        $base_url = strtok( $original_url, '?' );
+        $api_key    = get_option( 'rolmar_api_key', '' );
+        $site_url   = get_site_url();
 
-        // Try URLs in order: original (with c= param), then without c=, then base.
-        $urls_to_try = array( $original_url );
-        if ( $without_c_url !== $original_url ) {
-            $urls_to_try[] = $without_c_url;
-        }
-        if ( $base_url !== $original_url && $base_url !== $without_c_url ) {
-            $urls_to_try[] = $base_url;
+        if ( ! filter_var( $download_url, FILTER_VALIDATE_URL ) ) {
+            Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$download_url}", 'import' );
+            return false;
         }
 
-        $api_key = get_option( 'rolmar_api_key', '' );
+        Rolmar_Logger::info( "Downloading image for {$sku} from: {$download_url}", 'import' );
 
-        foreach ( $urls_to_try as $try_url ) {
-            if ( ! filter_var( $try_url, FILTER_VALIDATE_URL ) ) {
-                Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$try_url}", 'import' );
-                continue;
-            }
+        // Use wp_remote_get with auth headers (photo server may require them).
+        // sslverify disabled because photo2.rol-mar.com.pl is behind Cloudflare.
+        // X-Shop-Domain header helps Rolmar tech identify our requests in logs.
+        $response = wp_remote_get( $download_url, array(
+            'timeout'   => 30,
+            'sslverify' => false,
+            'headers'   => array(
+                'wsKey'         => $api_key,
+                'Referer'       => 'https://www.rol-mar.com.pl/',
+                'X-Shop-Domain' => $site_url,
+            ),
+        ) );
 
-            Rolmar_Logger::info( "Attempting to download image for {$sku} from: {$try_url}", 'import' );
-
-            // Use wp_remote_get with auth headers (photo server may require them).
-            // sslverify disabled because photo2.rol-mar.com.pl is behind Cloudflare.
-            $response = wp_remote_get( $try_url, array(
-                'timeout'   => 30,
-                'sslverify' => false,
-                'headers'   => array(
-                    'wsKey'   => $api_key,
-                    'Referer' => 'https://www.rol-mar.com.pl/',
-                ),
-            ) );
-
-            if ( is_wp_error( $response ) ) {
-                Rolmar_Logger::warning( "Download error for {$sku}: " . $response->get_error_message() . " | URL: {$try_url}", 'import' );
-                continue;
-            }
-
-            $http_code = wp_remote_retrieve_response_code( $response );
-
-            if ( 200 !== $http_code ) {
-                Rolmar_Logger::warning( "Image HTTP {$http_code} for {$sku}: {$try_url}", 'import' );
-                continue;
-            }
-
-            $body = wp_remote_retrieve_body( $response );
-            if ( empty( $body ) ) {
-                Rolmar_Logger::warning( "Empty image body for {$sku}: {$try_url}", 'import' );
-                continue;
-            }
-
-            // Convert to WebP in memory for smaller file size and faster loading.
-            $webp_body = $this->convert_to_webp( $body, $sku );
-            if ( false !== $webp_body ) {
-                $body      = $webp_body;
-                $file_ext  = 'webp';
-                $mime_type = 'image/webp';
-                unset( $webp_body ); // Free memory immediately.
-            } else {
-                // Fallback: keep original format.
-                $file_ext  = pathinfo( wp_parse_url( $try_url, PHP_URL_PATH ), PATHINFO_EXTENSION );
-                $file_ext  = $file_ext ?: 'png';
-                $mime_type = '';
-            }
-
-            // Save to temp file.
-            $tmp = wp_tempnam( $sku );
-            file_put_contents( $tmp, $body );
-            unset( $body ); // Free memory — file is on disk now.
-
-            if ( ! function_exists( 'media_handle_sideload' ) ) {
-                require_once ABSPATH . 'wp-admin/includes/media.php';
-                require_once ABSPATH . 'wp-admin/includes/file.php';
-                require_once ABSPATH . 'wp-admin/includes/image.php';
-            }
-
-            $file_name = sanitize_file_name( $sku . '.' . $file_ext );
-
-            $file_array = array(
-                'name'     => $file_name,
-                'tmp_name' => $tmp,
-            );
-
-            $attachment_id = media_handle_sideload( $file_array, 0 );
-
-            if ( is_wp_error( $attachment_id ) ) {
-                Rolmar_Logger::error( "Failed to import image to media library for {$sku}: " . $attachment_id->get_error_message(), 'import' );
-                @unlink( $tmp );
-                continue;
-            }
-
-            Rolmar_Logger::info( "Successfully uploaded image for {$sku} (Attachment ID: {$attachment_id}) from: {$try_url}", 'import' );
-            return $attachment_id;
+        if ( is_wp_error( $response ) ) {
+            Rolmar_Logger::warning( "Download error for {$sku}: " . $response->get_error_message() . " | URL: {$download_url}", 'import' );
+            return false;
         }
 
-        Rolmar_Logger::warning( "All image URL variants failed for {$sku}. Original: {$url}", 'import' );
-        return false;
+        $http_code       = wp_remote_retrieve_response_code( $response );
+        $cf_cache_status = wp_remote_retrieve_header( $response, 'cf-cache-status' );
+        $cf_ray          = wp_remote_retrieve_header( $response, 'cf-ray' );
+
+        if ( 200 !== $http_code ) {
+            $cf_info = '';
+            if ( $cf_cache_status ) {
+                $cf_info .= " | CF-Cache: {$cf_cache_status}";
+            }
+            if ( $cf_ray ) {
+                $cf_info .= " | CF-Ray: {$cf_ray}";
+            }
+            Rolmar_Logger::warning( "Image HTTP {$http_code} for {$sku}: {$original_url}{$cf_info}", 'import' );
+            return false;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+        if ( empty( $body ) ) {
+            Rolmar_Logger::warning( "Empty image body for {$sku}: {$original_url}", 'import' );
+            return false;
+        }
+
+        // Convert to WebP in memory for smaller file size and faster loading.
+        $webp_body = $this->convert_to_webp( $body, $sku );
+        if ( false !== $webp_body ) {
+            $body      = $webp_body;
+            $file_ext  = 'webp';
+            $mime_type = 'image/webp';
+            unset( $webp_body ); // Free memory immediately.
+        } else {
+            // Fallback: keep original format.
+            $file_ext  = pathinfo( wp_parse_url( $original_url, PHP_URL_PATH ), PATHINFO_EXTENSION );
+            $file_ext  = $file_ext ?: 'png';
+            $mime_type = '';
+        }
+
+        // Save to temp file.
+        $tmp = wp_tempnam( $sku );
+        file_put_contents( $tmp, $body );
+        unset( $body ); // Free memory — file is on disk now.
+
+        if ( ! function_exists( 'media_handle_sideload' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/media.php';
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+        }
+
+        $file_name = sanitize_file_name( $sku . '.' . $file_ext );
+
+        $file_array = array(
+            'name'     => $file_name,
+            'tmp_name' => $tmp,
+        );
+
+        $attachment_id = media_handle_sideload( $file_array, 0 );
+
+        if ( is_wp_error( $attachment_id ) ) {
+            Rolmar_Logger::error( "Failed to import image to media library for {$sku}: " . $attachment_id->get_error_message(), 'import' );
+            @unlink( $tmp );
+            return false;
+        }
+
+        Rolmar_Logger::info( "Successfully uploaded image for {$sku} (Attachment ID: {$attachment_id}) from: {$original_url}", 'import' );
+        return $attachment_id;
     }
 
     /**
