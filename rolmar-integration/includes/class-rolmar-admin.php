@@ -1296,45 +1296,32 @@ class Rolmar_Admin {
         if ( preg_match( '/[?&](d=[^&]+)/', $original_url, $d_match ) ) {
             $d_param = $d_match[1];
         }
+        $d_prefix = $d_param ? '?' . $d_param . '&' : '?';
 
         $url_variants = array();
-        $url_variants['Oryginalny (z c=)'] = $original_url;
+        $url_variants['Oryginalny (c=-bth..)'] = $original_url;
+        $url_variants['Bez parametru c=']      = $base_url . ( $d_param ? '?' . $d_param : '' );
+        $url_variants['Sam plik']              = $base_url;
 
-        // Without c= param.
-        $without_c = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
-        $without_c = rtrim( $without_c, '?&' );
-        $without_c = preg_replace( '/\?&/', '?', $without_c );
-        if ( $without_c !== $original_url ) {
-            $url_variants['Bez parametru c='] = $without_c;
-        }
-
-        // Base URL only (no query params).
-        if ( $base_url !== $original_url && $base_url !== $without_c ) {
-            $url_variants['Sam plik (bez query)'] = $base_url;
-        }
-
-        // Different c= dimension values.
-        $c_dim_variants = array(
-            'c=-bth800.800'  => 'c=-bth800.800',
-            'c=-bth200.200'  => 'c=-bth200.200',
-            'c=-bth'         => 'c=-bth',
-            'c=bth800.800'   => 'c=bth800.800',
+        // Different c= dimension values — test which gives full-size image.
+        $c_sizes = array(
+            'c=-bth800.800',
+            'c=-bth1200.1200',
+            'c=-bth1920.1920',
+            'c=-bth200.200',
+            'c=-bth',
+            'c=-bth0.0',
+            'c=bth800.800',
+            'c=-bth800x800',
         );
-        foreach ( $c_dim_variants as $label => $c_val ) {
-            $url_variants[ $label ] = $base_url . ( $d_param ? '?' . $d_param . '&' : '?' ) . $c_val;
+        foreach ( $c_sizes as $c_val ) {
+            $url_variants[ $c_val ] = $base_url . $d_prefix . $c_val;
         }
 
-        // HTTP variant.
-        if ( strpos( $original_url, 'https://' ) === 0 ) {
-            $url_variants['HTTP (bez SSL)'] = str_replace( 'https://', 'http://', $original_url );
-        }
-
-        // ---- Header combos ----
+        // ---- Headers: only working combo (wsKey, NO Referer) ----
+        // Matrix test showed Referer causes 404 on photo server.
         $header_combos = array(
-            'bez naglowkow'  => array(),
-            'wsKey'           => array( 'wsKey' => $api_key ),
-            'Referer'         => array( 'Referer' => 'https://www.rol-mar.com.pl/' ),
-            'wsKey + Referer' => array( 'wsKey' => $api_key, 'Referer' => 'https://www.rol-mar.com.pl/' ),
+            'wsKey (bez Referer)' => array( 'wsKey' => $api_key ),
         );
 
         // ---- Run full matrix: URL × Headers ----
