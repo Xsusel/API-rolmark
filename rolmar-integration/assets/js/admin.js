@@ -777,6 +777,87 @@
         });
     });
 
+    // Test Download Image Button
+    $('#rolmar-test-download-image').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-download-test-result');
+
+        $btn.prop('disabled', true).text('Pobieranie testowego zdjecia...');
+        $result.html('<div class="notice notice-info" style="padding: 10px;"><span class="spinner is-active" style="float:none; margin:0 8px 0 0;"></span> Pobieram liste zdjec z API i probuje pobrac jedno zdjecie...</div>');
+
+        $.ajax({
+            url: rolmarAdmin.ajaxUrl,
+            type: 'POST',
+            timeout: 120000,
+            data: {
+                action: 'rolmar_test_download_image',
+                nonce: rolmarAdmin.nonce
+            },
+            success: function (response) {
+                $btn.prop('disabled', false).text('Pobierz testowe zdjecie');
+
+                if (response.success) {
+                    var d = response.data;
+                    var html = '';
+
+                    if (d.success) {
+                        html += '<div class="notice notice-success" style="padding: 15px;">';
+                        html += '<h3 style="margin-top:0; color: #00a32a;">&#10004; Zdjecie pobrane poprawnie!</h3>';
+                    } else {
+                        html += '<div class="notice notice-error" style="padding: 15px;">';
+                        html += '<h3 style="margin-top:0; color: #d63638;">&#10008; Nie udalo sie pobrac zdjecia</h3>';
+                    }
+
+                    // Info for technician - easy to copy
+                    html += '<div style="background:#f0f6fc; border:2px solid #2271b1; border-radius:6px; padding:15px; margin:10px 0;">';
+                    html += '<h4 style="margin-top:0; color:#2271b1;">Dane do wyslania technikowi Rolmar:</h4>';
+                    html += '<table style="border-collapse:collapse; width:100%;">';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Data/czas testu:</td><td>' + d.timestamp + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">SKU:</td><td><code>' + d.sku + '</code></td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Link do zdjecia:</td><td style="word-break:break-all;"><a href="' + d.original_url + '" target="_blank">' + d.original_url + '</a></td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">IP serwera:</td><td>' + d.server_ip + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Wynik:</td><td><strong style="color:' + (d.success ? '#00a32a' : '#d63638') + ';">' + (d.success ? 'POBRANO' : 'BLAD') + '</strong></td></tr>';
+                    html += '</table>';
+                    html += '</div>';
+
+                    // Detailed attempts
+                    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">Szczegoly prob pobrania (' + d.attempts.length + ' prob)</summary>';
+                    html += '<table class="widefat striped" style="margin-top:10px; font-size:12px;">';
+                    html += '<thead><tr><th>#</th><th>URL</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>Czas</th><th>Obraz?</th><th>Blad</th></tr></thead><tbody>';
+
+                    d.attempts.forEach(function (a, i) {
+                        var rowStyle = a.is_image ? 'background:#d4edda;' : (a.http_code === 200 ? 'background:#fff3cd;' : '');
+                        html += '<tr style="' + rowStyle + '">';
+                        html += '<td>' + (i + 1) + '</td>';
+                        html += '<td style="font-size:10px; word-break:break-all; max-width:400px;">' + a.url + '</td>';
+                        html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
+                        html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
+                        html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
+                        html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
+                        html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
+                        html += '<td style="font-size:10px; color:#d63638;">' + (a.error || '') + '</td>';
+                        html += '</tr>';
+                    });
+
+                    html += '</tbody></table></details>';
+                    html += '</div>';
+
+                    $result.html(html);
+                } else {
+                    $result.html('<div class="notice notice-error"><p>' + (response.data.message || 'Nieznany blad') + '</p></div>');
+                }
+            },
+            error: function (jqXHR, textStatus, errorThrown) {
+                $btn.prop('disabled', false).text('Pobierz testowe zdjecie');
+                var msg = 'Blad polaczenia z serwerem.';
+                if (textStatus === 'timeout') {
+                    msg = 'Przekroczono czas oczekiwania (120s).';
+                }
+                $result.html('<div class="notice notice-error"><p>' + msg + '</p></div>');
+            }
+        });
+    });
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {

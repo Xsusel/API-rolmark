@@ -32,6 +32,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_debug_photos_api', array( $this, 'ajax_debug_photos_api' ) );
         add_action( 'wp_ajax_rolmar_debug_existing_products', array( $this, 'ajax_debug_existing_products' ) );
         add_action( 'wp_ajax_rolmar_run_diagnostics', array( $this, 'ajax_run_diagnostics' ) );
+        add_action( 'wp_ajax_rolmar_test_download_image', array( $this, 'ajax_test_download_image' ) );
     }
 
     public function add_menu() {
@@ -384,6 +385,18 @@ class Rolmar_Admin {
                 </button>
             </p>
             <div id="rolmar-debug-result" style="margin-top: 15px;"></div>
+
+            <hr />
+            <h2><?php esc_html_e( 'Test pobrania zdjęcia', 'rolmar-integration' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Pobierz jedno zdjęcie z API i sprawdź czy się pobiera. Wynik (link) wyślij technikowi Rolmar.', 'rolmar-integration' ); ?>
+            </p>
+            <p>
+                <button type="button" id="rolmar-test-download-image" class="button button-primary" style="background: #d63638; border-color: #d63638; font-size: 14px; padding: 4px 20px; height: auto;">
+                    <?php esc_html_e( 'Pobierz testowe zdjęcie', 'rolmar-integration' ); ?>
+                </button>
+            </p>
+            <div id="rolmar-download-test-result" style="margin-top: 15px;"></div>
         </div>
         <?php
     }
@@ -1194,6 +1207,180 @@ class Rolmar_Admin {
     /**
      * Run all diagnostic checks.
      */
+    /**
+     * AJAX handler: test download of a single image from getPhotos API.
+     * Runs from the shop server so the IP matches Cloudflare whitelist.
+     */
+    public function ajax_test_download_image() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Brak uprawnien.' ) );
+        }
+
+        @set_time_limit( 120 );
+
+        $api = new Rolmar_API_Client();
+        $photos = $api->get_photos();
+
+        if ( is_wp_error( $photos ) ) {
+            wp_send_json_error( array( 'message' => 'Blad API getPhotos: ' . $photos->get_error_message() ) );
+        }
+
+        if ( ! is_array( $photos ) || empty( $photos ) ) {
+            wp_send_json_error( array( 'message' => 'API zwrocilo pusta odpowiedz.' ) );
+        }
+
+        // Find first product with a photo URL.
+        $test_url = '';
+        $test_sku = '';
+
+        foreach ( $photos as $item ) {
+            $sku = '';
+            if ( isset( $item['Index'] ) ) {
+                $sku = $item['Index'];
+            } elseif ( isset( $item['productIndex'] ) ) {
+                $sku = $item['productIndex'];
+            } elseif ( isset( $item['index'] ) ) {
+                $sku = $item['index'];
+            }
+
+            $url = '';
+            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $url = $item['Photo'][0];
+            } elseif ( isset( $item['Photo'] ) && is_string( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $url = $item['Photo'];
+            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                $url = $item['url'];
+            } elseif ( isset( $item['photo'] ) && ! empty( $item['photo'] ) ) {
+                $url = $item['photo'];
+            }
+
+            if ( ! empty( $url ) && ! empty( $sku ) ) {
+                $test_url = $url;
+                $test_sku = $sku;
+                break;
+            }
+        }
+
+        if ( empty( $test_url ) ) {
+            wp_send_json_error( array(
+                'message' => 'Zaden produkt w API nie ma URL-a zdjecia!',
+                'total_entries' => count( $photos ),
+            ) );
+        }
+
+        // Prepare URL variants (same logic as plugin upload_image_from_url).
+        $original_url = rtrim( $test_url, '. ' );
+        $cleaned_url  = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
+        $cleaned_url  = rtrim( $cleaned_url, '?&' );
+        $cleaned_url  = preg_replace( '/\?&/', '?', $cleaned_url );
+        $base_url     = strtok( $original_url, '?' );
+
+        $urls_to_try = array( $original_url );
+        if ( $cleaned_url !== $original_url ) {
+            $urls_to_try[] = $cleaned_url;
+        }
+        if ( $base_url !== $original_url && $base_url !== $cleaned_url ) {
+            $urls_to_try[] = $base_url;
+        }
+
+        $api_key = get_option( 'rolmar_api_key', '' );
+        $attempts = array();
+        $success = false;
+        $success_url = '';
+
+        foreach ( $urls_to_try as $try_url ) {
+            $attempt = array(
+                'url'        => $try_url,
+                'http_code'  => 0,
+                'size_bytes' => 0,
+                'size_kb'    => 0,
+                'is_image'   => false,
+                'content_type' => '',
+                'error'      => '',
+                'time_ms'    => 0,
+                'dimensions' => '',
+            );
+
+            if ( ! filter_var( $try_url, FILTER_VALIDATE_URL ) ) {
+                $attempt['error'] = 'Nieprawidlowy format URL';
+                $attempts[] = $attempt;
+                continue;
+            }
+
+            $start = microtime( true );
+            $response = wp_remote_get( $try_url, array(
+                'timeout'   => 30,
+                'sslverify' => false,
+                'headers'   => array(
+                    'wsKey'   => $api_key,
+                    'Referer' => 'https://www.rol-mar.com.pl/',
+                ),
+            ) );
+            $attempt['time_ms'] = round( ( microtime( true ) - $start ) * 1000 );
+
+            if ( is_wp_error( $response ) ) {
+                $attempt['error'] = $response->get_error_message();
+                $attempts[] = $attempt;
+                continue;
+            }
+
+            $attempt['http_code']     = wp_remote_retrieve_response_code( $response );
+            $attempt['content_type']  = wp_remote_retrieve_header( $response, 'content-type' );
+            $body                     = wp_remote_retrieve_body( $response );
+            $attempt['size_bytes']    = strlen( $body );
+            $attempt['size_kb']       = round( strlen( $body ) / 1024, 1 );
+
+            if ( 200 === (int) $attempt['http_code'] && ! empty( $body ) ) {
+                if ( strpos( $attempt['content_type'], 'image/' ) !== false ) {
+                    $attempt['is_image'] = true;
+                } elseif ( function_exists( 'imagecreatefromstring' ) ) {
+                    $img = @imagecreatefromstring( $body );
+                    if ( false !== $img ) {
+                        $attempt['is_image']    = true;
+                        $attempt['dimensions']  = imagesx( $img ) . 'x' . imagesy( $img ) . ' px';
+                        imagedestroy( $img );
+                    }
+                }
+
+                if ( $attempt['is_image'] ) {
+                    $success = true;
+                    $success_url = $try_url;
+                }
+            } else {
+                // Include first 200 chars of body for non-image responses.
+                if ( $attempt['size_bytes'] > 0 && $attempt['size_bytes'] < 1000 ) {
+                    $preview = substr( $body, 0, 200 );
+                    if ( ! preg_match( '/[\x00-\x08\x0E-\x1F]/', $preview ) ) {
+                        $attempt['error'] = 'Tresc: ' . $preview;
+                    }
+                }
+            }
+
+            $attempts[] = $attempt;
+
+            if ( $success ) {
+                break;
+            }
+        }
+
+        $timestamp = current_time( 'Y-m-d H:i:s' );
+
+        Rolmar_Logger::info( "Test download image: SKU={$test_sku}, URL={$original_url}, success=" . ( $success ? 'YES' : 'NO' ), 'import' );
+
+        wp_send_json_success( array(
+            'sku'           => $test_sku,
+            'original_url'  => $original_url,
+            'success'       => $success,
+            'success_url'   => $success_url,
+            'attempts'      => $attempts,
+            'timestamp'     => $timestamp,
+            'total_entries'  => count( $photos ),
+            'server_ip'     => isset( $_SERVER['SERVER_ADDR'] ) ? $_SERVER['SERVER_ADDR'] : 'nieznane',
+        ) );
+    }
+
     private function run_diagnostics_checks() {
         $checks = array();
         $photos_data = null;
