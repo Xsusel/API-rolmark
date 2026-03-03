@@ -823,9 +823,9 @@ class Rolmar_Admin {
                 $alt_photos[] = $product['image'];
             }
 
-            // Prepare URL variants to test.
-            $original_url = rtrim( $main_photo, '. ' );
-            $cleaned_url = preg_replace( '/[?&]c=-[^&]*/', '', $original_url );
+            // Prepare URL variants to test. Keep c= param intact (e.g. "c=-bth..").
+            $original_url = trim( $main_photo );
+            $cleaned_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
             $cleaned_url = rtrim( $cleaned_url, '?&' );
             $cleaned_url = preg_replace( '/\?&/', '?', $cleaned_url );
 
@@ -959,7 +959,7 @@ class Rolmar_Admin {
             $tested_urls_info = array();
 
             if ( ! empty( $photo_urls[0] ) ) {
-                $raw_url = rtrim( $photo_urls[0], '. ' );
+                $raw_url = trim( $photo_urls[0] );
                 $clean_url = $this->clean_photo_url( $photo_urls[0] );
                 $api_key = get_option( 'rolmar_api_key', '' );
 
@@ -1270,18 +1270,23 @@ class Rolmar_Admin {
             ) );
         }
 
-        // Prepare URL variants (same logic as plugin upload_image_from_url).
-        $original_url = rtrim( $test_url, '. ' );
-        $cleaned_url  = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
-        $cleaned_url  = rtrim( $cleaned_url, '?&' );
-        $cleaned_url  = preg_replace( '/\?&/', '?', $cleaned_url );
-        $base_url     = strtok( $original_url, '?' );
+        // Keep the original URL intact — the c= parameter (e.g. "c=-bth..") is required.
+        // Do NOT rtrim dots — they are part of the c= value.
+        $original_url = trim( $test_url );
+
+        // Fallback without c= param.
+        $without_c_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
+        $without_c_url = rtrim( $without_c_url, '?&' );
+        $without_c_url = preg_replace( '/\?&/', '?', $without_c_url );
+
+        // Fallback without any query params.
+        $base_url = strtok( $original_url, '?' );
 
         $urls_to_try = array( $original_url );
-        if ( $cleaned_url !== $original_url ) {
-            $urls_to_try[] = $cleaned_url;
+        if ( $without_c_url !== $original_url ) {
+            $urls_to_try[] = $without_c_url;
         }
-        if ( $base_url !== $original_url && $base_url !== $cleaned_url ) {
+        if ( $base_url !== $original_url && $base_url !== $without_c_url ) {
             $urls_to_try[] = $base_url;
         }
 
@@ -1789,7 +1794,7 @@ class Rolmar_Admin {
 
             // Build all possible URL variants to test.
             $url_variants = array();
-            $url_variants['Oryginalny URL z API'] = rtrim( $photo_test_url_raw, '. ' );
+            $url_variants['Oryginalny URL z API'] = trim( $photo_test_url_raw );
             if ( $clean_url !== $url_variants['Oryginalny URL z API'] ) {
                 $url_variants['Oczyszczony URL (bez c=)'] = $clean_url;
             }
@@ -1880,7 +1885,7 @@ class Rolmar_Admin {
             // 13b. If all fail — try "c=" param with different dimension values.
             // The API returns "c=-bth.." where ".." may be placeholders for dimensions.
             if ( ! $any_photo_ok ) {
-                $base_photo_url = strtok( rtrim( $photo_test_url_raw, '. ' ), '?' );
+                $base_photo_url = strtok( trim( $photo_test_url_raw ), '?' );
                 // Extract "d" param value if present.
                 $d_param = '';
                 if ( preg_match( '/[?&]d=([^&]+)/', $photo_test_url_raw, $d_match ) ) {
@@ -2171,11 +2176,11 @@ class Rolmar_Admin {
      * @return string Cleaned URL.
      */
     private function clean_photo_url( $url ) {
-        // Remove trailing dots and spaces.
-        $url = rtrim( $url, '. ' );
+        // Only trim spaces — dots are part of the c= value (e.g. "c=-bth..").
+        $url = trim( $url );
 
-        // Remove malformed 'c' query parameter (e.g., "&c=-bth.." or "?c=-bth..").
-        $url = preg_replace( '/[?&]c=-[^&]*/', '', $url );
+        // Remove 'c' query parameter as fallback variant.
+        $url = preg_replace( '/[?&]c=[^&]*/', '', $url );
 
         // Clean up leftover '?' or '&'.
         $url = rtrim( $url, '?&' );

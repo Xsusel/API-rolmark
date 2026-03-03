@@ -554,24 +554,24 @@ class Rolmar_Product_Importer {
             return false;
         }
 
-        // Remove trailing dots and spaces from the URL (API often returns "..").
-        $original_url = rtrim( $url, '. ' );
+        // Keep the original URL intact — the c= parameter (e.g. "c=-bth..") is required
+        // by the photo server. Do NOT rtrim dots — they are part of the c= value.
+        $original_url = trim( $url );
 
-        // Also prepare a cleaned variant without the 'c' param as fallback.
-        // The c= parameter is often truncated (e.g. "c=-bth..") and causes 404s.
-        $cleaned_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
-        $cleaned_url = rtrim( $cleaned_url, '?&' );
-        $cleaned_url = preg_replace( '/\?&/', '?', $cleaned_url );
+        // Fallback without c= param (only if original fails).
+        $without_c_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
+        $without_c_url = rtrim( $without_c_url, '?&' );
+        $without_c_url = preg_replace( '/\?&/', '?', $without_c_url );
 
-        // Try URLs in order: original, then without c param, then base URL only.
-        $urls_to_try = array( $original_url );
-        if ( $cleaned_url !== $original_url ) {
-            $urls_to_try[] = $cleaned_url;
-        }
-
-        // Also try without all query params as last resort.
+        // Fallback without any query params (last resort).
         $base_url = strtok( $original_url, '?' );
-        if ( $base_url !== $original_url && $base_url !== $cleaned_url ) {
+
+        // Try URLs in order: original (with c= param), then without c=, then base.
+        $urls_to_try = array( $original_url );
+        if ( $without_c_url !== $original_url ) {
+            $urls_to_try[] = $without_c_url;
+        }
+        if ( $base_url !== $original_url && $base_url !== $without_c_url ) {
             $urls_to_try[] = $base_url;
         }
 

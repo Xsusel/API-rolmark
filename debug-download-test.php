@@ -148,8 +148,8 @@ out( '' );
 // ─── 4. Show the URL clearly ────────────────────────────────────
 out_header( 'KROK 3: URL DO WYSLANIA TECHNIKOWI' );
 
-// Prepare URL variants (same logic as plugin).
-$original_url = rtrim( $test_url, '. ' );
+// Keep the original URL intact — c= parameter (e.g. "c=-bth..") is required.
+$original_url = trim( $test_url );
 $cleaned_url  = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
 $cleaned_url  = rtrim( $cleaned_url, '?&' );
 $cleaned_url  = preg_replace( '/\?&/', '?', $cleaned_url );
