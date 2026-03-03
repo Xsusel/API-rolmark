@@ -1101,29 +1101,42 @@ class Rolmar_Product_Importer {
                 continue;
             }
 
-            // Set featured image: prefer url marked as main, otherwise first url.
+            // Determine main URL and gallery URLs.
+            // If API marks one as main, use it; otherwise use first URL.
+            $main_url = ! empty( $photo_data['main'][0] ) ? $photo_data['main'][0] : $all_urls[0];
+
+            // Gallery = all URLs except the one used as main (avoid duplicates).
+            $gallery_urls = array();
+            foreach ( $all_urls as $u ) {
+                if ( $u !== $main_url ) {
+                    $gallery_urls[] = $u;
+                }
+            }
+
+            Rolmar_Logger::info( "Product {$sku}: 1 main + " . count( $gallery_urls ) . ' gallery photos to process.', 'import' );
+
+            // Set featured image if product doesn't have one yet.
             if ( ! get_post_thumbnail_id( $product_id ) ) {
-                $main_url = ! empty( $photo_data['main'][0] ) ? $photo_data['main'][0] : $all_urls[0];
                 $image_id = $this->upload_image_from_url( $main_url, $sku . '_main' );
                 if ( $image_id ) {
                     $product->set_image_id( $image_id );
                 }
             }
 
-            // Set gallery images from remaining photos.
-            $gallery_urls = $photo_data['gallery'];
+            // Set gallery images from remaining photos (only if product has no gallery yet).
             if ( ! empty( $gallery_urls ) ) {
                 $existing_gallery = $product->get_gallery_image_ids();
                 if ( empty( $existing_gallery ) ) {
                     $gallery_ids = array();
                     foreach ( $gallery_urls as $i => $gallery_url ) {
-                        $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_' . ( $i + 1 ) );
+                        $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_gallery_' . ( $i + 1 ) );
                         if ( $gallery_id ) {
                             $gallery_ids[] = $gallery_id;
                         }
                     }
                     if ( ! empty( $gallery_ids ) ) {
                         $product->set_gallery_image_ids( $gallery_ids );
+                        Rolmar_Logger::info( "Product {$sku}: added " . count( $gallery_ids ) . ' gallery images.', 'import' );
                     }
                 }
             }
