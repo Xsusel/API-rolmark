@@ -817,27 +817,35 @@
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Link do zdjecia:</td><td style="word-break:break-all;"><a href="' + d.original_url + '" target="_blank">' + d.original_url + '</a></td></tr>';
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">IP serwera:</td><td>' + d.server_ip + '</td></tr>';
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Wynik:</td><td><strong style="color:' + (d.success ? '#00a32a' : '#d63638') + ';">' + (d.success ? 'POBRANO' : 'BLAD') + '</strong></td></tr>';
+                    if (d.attempt && d.attempt.cf_cache_status) {
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Cloudflare Cache:</td><td>' + d.attempt.cf_cache_status + '</td></tr>';
+                    }
+                    if (d.attempt && d.attempt.cf_ray) {
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">CF-Ray:</td><td><code>' + d.attempt.cf_ray + '</code></td></tr>';
+                    }
+                    if (d.cache_bust_info) {
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Cache-busting:</td><td>' + d.cache_bust_info + '</td></tr>';
+                    }
                     html += '</table>';
                     html += '</div>';
 
-                    // Detailed attempts
-                    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">Szczegoly prob pobrania (' + d.attempts.length + ' prob)</summary>';
+                    // Detailed attempt info
+                    var a = d.attempt || {};
+                    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">Szczegoly proby pobrania</summary>';
                     html += '<table class="widefat striped" style="margin-top:10px; font-size:12px;">';
-                    html += '<thead><tr><th>#</th><th>URL</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>Czas</th><th>Obraz?</th><th>Blad</th></tr></thead><tbody>';
+                    html += '<thead><tr><th>URL</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>CF-Cache</th><th>Czas</th><th>Obraz?</th><th>Blad</th></tr></thead><tbody>';
 
-                    d.attempts.forEach(function (a, i) {
-                        var rowStyle = a.is_image ? 'background:#d4edda;' : (a.http_code === 200 ? 'background:#fff3cd;' : '');
-                        html += '<tr style="' + rowStyle + '">';
-                        html += '<td>' + (i + 1) + '</td>';
-                        html += '<td style="font-size:10px; word-break:break-all; max-width:400px;">' + a.url + '</td>';
-                        html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
-                        html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
-                        html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
-                        html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
-                        html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
-                        html += '<td style="font-size:10px; color:#d63638;">' + (a.error || '') + '</td>';
-                        html += '</tr>';
-                    });
+                    var rowStyle = a.is_image ? 'background:#d4edda;' : (a.http_code === 200 ? 'background:#fff3cd;' : '');
+                    html += '<tr style="' + rowStyle + '">';
+                    html += '<td style="font-size:10px; word-break:break-all; max-width:400px;">' + (a.url || '-') + '</td>';
+                    html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
+                    html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
+                    html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
+                    html += '<td style="font-size:10px;">' + (a.cf_cache_status || '-') + '</td>';
+                    html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
+                    html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
+                    html += '<td style="font-size:10px; color:#d63638;">' + (a.error || '') + '</td>';
+                    html += '</tr>';
 
                     html += '</tbody></table></details>';
                     html += '</div>';

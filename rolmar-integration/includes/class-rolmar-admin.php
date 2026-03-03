@@ -1274,99 +1274,82 @@ class Rolmar_Admin {
         // Do NOT rtrim dots — they are part of the c= value.
         $original_url = trim( $test_url );
 
-        // Fallback without c= param.
-        $without_c_url = preg_replace( '/[?&]c=[^&]*/', '', $original_url );
-        $without_c_url = rtrim( $without_c_url, '?&' );
-        $without_c_url = preg_replace( '/\?&/', '?', $without_c_url );
+        // Add cache-busting to bypass Cloudflare cache — ensures request reaches origin.
+        $cache_bust   = '_nocache=' . time();
+        $download_url = $original_url . ( strpos( $original_url, '?' ) !== false ? '&' : '?' ) . $cache_bust;
 
-        // Fallback without any query params.
-        $base_url = strtok( $original_url, '?' );
+        $api_key  = get_option( 'rolmar_api_key', '' );
+        $site_url = get_site_url();
 
-        $urls_to_try = array( $original_url );
-        if ( $without_c_url !== $original_url ) {
-            $urls_to_try[] = $without_c_url;
-        }
-        if ( $base_url !== $original_url && $base_url !== $without_c_url ) {
-            $urls_to_try[] = $base_url;
-        }
+        $attempt = array(
+            'url'             => $original_url,
+            'download_url'    => $download_url,
+            'http_code'       => 0,
+            'size_bytes'      => 0,
+            'size_kb'         => 0,
+            'is_image'        => false,
+            'content_type'    => '',
+            'error'           => '',
+            'time_ms'         => 0,
+            'dimensions'      => '',
+            'cf_cache_status' => '',
+            'cf_ray'          => '',
+        );
 
-        $api_key = get_option( 'rolmar_api_key', '' );
-        $attempts = array();
-        $success = false;
+        $success     = false;
         $success_url = '';
 
-        foreach ( $urls_to_try as $try_url ) {
-            $attempt = array(
-                'url'        => $try_url,
-                'http_code'  => 0,
-                'size_bytes' => 0,
-                'size_kb'    => 0,
-                'is_image'   => false,
-                'content_type' => '',
-                'error'      => '',
-                'time_ms'    => 0,
-                'dimensions' => '',
-            );
-
-            if ( ! filter_var( $try_url, FILTER_VALIDATE_URL ) ) {
-                $attempt['error'] = 'Nieprawidlowy format URL';
-                $attempts[] = $attempt;
-                continue;
-            }
-
+        if ( ! filter_var( $download_url, FILTER_VALIDATE_URL ) ) {
+            $attempt['error'] = 'Nieprawidlowy format URL';
+        } else {
             $start = microtime( true );
-            $response = wp_remote_get( $try_url, array(
+            $response = wp_remote_get( $download_url, array(
                 'timeout'   => 30,
                 'sslverify' => false,
                 'headers'   => array(
-                    'wsKey'   => $api_key,
-                    'Referer' => 'https://www.rol-mar.com.pl/',
+                    'wsKey'         => $api_key,
+                    'Referer'       => 'https://www.rol-mar.com.pl/',
+                    'X-Shop-Domain' => $site_url,
                 ),
             ) );
             $attempt['time_ms'] = round( ( microtime( true ) - $start ) * 1000 );
 
             if ( is_wp_error( $response ) ) {
                 $attempt['error'] = $response->get_error_message();
-                $attempts[] = $attempt;
-                continue;
-            }
-
-            $attempt['http_code']     = wp_remote_retrieve_response_code( $response );
-            $attempt['content_type']  = wp_remote_retrieve_header( $response, 'content-type' );
-            $body                     = wp_remote_retrieve_body( $response );
-            $attempt['size_bytes']    = strlen( $body );
-            $attempt['size_kb']       = round( strlen( $body ) / 1024, 1 );
-
-            if ( 200 === (int) $attempt['http_code'] && ! empty( $body ) ) {
-                if ( strpos( $attempt['content_type'], 'image/' ) !== false ) {
-                    $attempt['is_image'] = true;
-                } elseif ( function_exists( 'imagecreatefromstring' ) ) {
-                    $img = @imagecreatefromstring( $body );
-                    if ( false !== $img ) {
-                        $attempt['is_image']    = true;
-                        $attempt['dimensions']  = imagesx( $img ) . 'x' . imagesy( $img ) . ' px';
-                        imagedestroy( $img );
-                    }
-                }
-
-                if ( $attempt['is_image'] ) {
-                    $success = true;
-                    $success_url = $try_url;
-                }
             } else {
-                // Include first 200 chars of body for non-image responses.
-                if ( $attempt['size_bytes'] > 0 && $attempt['size_bytes'] < 1000 ) {
-                    $preview = substr( $body, 0, 200 );
-                    if ( ! preg_match( '/[\x00-\x08\x0E-\x1F]/', $preview ) ) {
-                        $attempt['error'] = 'Tresc: ' . $preview;
+                $attempt['http_code']       = wp_remote_retrieve_response_code( $response );
+                $attempt['content_type']    = wp_remote_retrieve_header( $response, 'content-type' );
+                $attempt['cf_cache_status'] = wp_remote_retrieve_header( $response, 'cf-cache-status' );
+                $attempt['cf_ray']          = wp_remote_retrieve_header( $response, 'cf-ray' );
+                $body                       = wp_remote_retrieve_body( $response );
+                $attempt['size_bytes']      = strlen( $body );
+                $attempt['size_kb']         = round( strlen( $body ) / 1024, 1 );
+
+                if ( 200 === (int) $attempt['http_code'] && ! empty( $body ) ) {
+                    if ( strpos( $attempt['content_type'], 'image/' ) !== false ) {
+                        $attempt['is_image'] = true;
+                    } elseif ( function_exists( 'imagecreatefromstring' ) ) {
+                        $img = @imagecreatefromstring( $body );
+                        if ( false !== $img ) {
+                            $attempt['is_image']    = true;
+                            $attempt['dimensions']  = imagesx( $img ) . 'x' . imagesy( $img ) . ' px';
+                            imagedestroy( $img );
+                        }
+                    }
+
+                    if ( $attempt['is_image'] ) {
+                        $success     = true;
+                        $success_url = $original_url;
+                    }
+                } else {
+                    // Include first 200 chars of body for non-image responses.
+                    if ( $attempt['size_bytes'] > 0 && $attempt['size_bytes'] < 1000 ) {
+                        $preview = substr( $body, 0, 200 );
+                        if ( ! preg_match( '/[\x00-\x08\x0E-\x1F]/', $preview ) ) {
+                            $attempt['error'] = 'Tresc: ' . $preview;
+                        }
                     }
                 }
-            }
-
-            $attempts[] = $attempt;
-
-            if ( $success ) {
-                break;
             }
         }
 
@@ -1375,14 +1358,16 @@ class Rolmar_Admin {
         Rolmar_Logger::info( "Test download image: SKU={$test_sku}, URL={$original_url}, success=" . ( $success ? 'YES' : 'NO' ), 'import' );
 
         wp_send_json_success( array(
-            'sku'           => $test_sku,
-            'original_url'  => $original_url,
-            'success'       => $success,
-            'success_url'   => $success_url,
-            'attempts'      => $attempts,
-            'timestamp'     => $timestamp,
-            'total_entries'  => count( $photos ),
-            'server_ip'     => isset( $_SERVER['SERVER_ADDR'] ) ? $_SERVER['SERVER_ADDR'] : 'nieznane',
+            'sku'             => $test_sku,
+            'original_url'    => $original_url,
+            'download_url'    => $download_url,
+            'success'         => $success,
+            'success_url'     => $success_url,
+            'attempt'         => $attempt,
+            'timestamp'       => $timestamp,
+            'total_entries'   => count( $photos ),
+            'server_ip'       => isset( $_SERVER['SERVER_ADDR'] ) ? $_SERVER['SERVER_ADDR'] : 'nieznane',
+            'cache_bust_info' => 'Dodano _nocache= aby ominac cache Cloudflare i dotrzec do origin',
         ) );
     }
 
@@ -1827,7 +1812,12 @@ class Rolmar_Admin {
                 );
 
                 foreach ( $header_combos as $h_label => $headers ) {
-                    $test_resp = wp_remote_get( $url, array(
+                    // Add cache-busting to bypass Cloudflare cache.
+                    $test_url_cb = $url . ( strpos( $url, '?' ) !== false ? '&' : '?' ) . '_nocache=' . time() . mt_rand( 100, 999 );
+                    // Add X-Shop-Domain to all header combos for identification.
+                    $headers['X-Shop-Domain'] = get_site_url();
+
+                    $test_resp = wp_remote_get( $test_url_cb, array(
                         'timeout'   => 5,
                         'sslverify' => false,
                         'headers'   => $headers,
@@ -1839,11 +1829,15 @@ class Rolmar_Admin {
                         $v_code = wp_remote_retrieve_response_code( $test_resp );
                         $v_type = wp_remote_retrieve_header( $test_resp, 'content-type' );
                         $v_len  = wp_remote_retrieve_header( $test_resp, 'content-length' );
+                        $v_cf   = wp_remote_retrieve_header( $test_resp, 'cf-cache-status' );
                         $v_body_len = strlen( wp_remote_retrieve_body( $test_resp ) );
 
                         $v_detail = 'HTTP ' . $v_code;
                         if ( $v_type ) {
                             $v_detail .= ', ' . $v_type;
+                        }
+                        if ( $v_cf ) {
+                            $v_detail .= ', CF:' . $v_cf;
                         }
                         if ( $v_len ) {
                             $v_detail .= ', ' . round( intval( $v_len ) / 1024 ) . 'KB';
@@ -1908,12 +1902,15 @@ class Rolmar_Admin {
                 $c_results = array();
                 $c_working = '';
                 foreach ( $c_variants as $c_label => $c_url ) {
-                    $c_resp = wp_remote_get( $c_url, array(
+                    // Add cache-busting to bypass Cloudflare cache.
+                    $c_url_cb = $c_url . ( strpos( $c_url, '?' ) !== false ? '&' : '?' ) . '_nocache=' . time() . mt_rand( 100, 999 );
+                    $c_resp = wp_remote_get( $c_url_cb, array(
                         'timeout'   => 5,
                         'sslverify' => false,
                         'headers'   => array(
-                            'wsKey'   => $api_key,
-                            'Referer' => 'https://www.rol-mar.com.pl/',
+                            'wsKey'         => $api_key,
+                            'Referer'       => 'https://www.rol-mar.com.pl/',
+                            'X-Shop-Domain' => get_site_url(),
                         ),
                     ) );
 
