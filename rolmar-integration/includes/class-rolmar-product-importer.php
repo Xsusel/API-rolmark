@@ -558,37 +558,27 @@ class Rolmar_Product_Importer {
         // by the photo server. Do NOT rtrim dots — they are part of the c= value.
         $original_url = trim( $url );
 
-        // Add cache-busting parameter to bypass Cloudflare cache.
-        // Without this, Cloudflare may serve cached 404 responses and the request
-        // never reaches the origin server (tech cannot see our IP in logs).
-        $cache_bust = '_nocache=' . time();
-        $download_url = $original_url . ( strpos( $original_url, '?' ) !== false ? '&' : '?' ) . $cache_bust;
+        $api_key = get_option( 'rolmar_api_key', '' );
 
-        $api_key    = get_option( 'rolmar_api_key', '' );
-        $site_url   = get_site_url();
-
-        if ( ! filter_var( $download_url, FILTER_VALIDATE_URL ) ) {
-            Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$download_url}", 'import' );
+        if ( ! filter_var( $original_url, FILTER_VALIDATE_URL ) ) {
+            Rolmar_Logger::warning( "Invalid image URL format for {$sku}: {$original_url}", 'import' );
             return false;
         }
 
-        Rolmar_Logger::info( "Downloading image for {$sku} from: {$download_url}", 'import' );
+        Rolmar_Logger::info( "Downloading image for {$sku} from: {$original_url}", 'import' );
 
-        // Use wp_remote_get with auth headers (photo server may require them).
         // sslverify disabled because photo2.rol-mar.com.pl is behind Cloudflare.
-        // X-Shop-Domain header helps Rolmar tech identify our requests in logs.
-        $response = wp_remote_get( $download_url, array(
+        $response = wp_remote_get( $original_url, array(
             'timeout'   => 30,
             'sslverify' => false,
             'headers'   => array(
-                'wsKey'         => $api_key,
-                'Referer'       => 'https://www.rol-mar.com.pl/',
-                'X-Shop-Domain' => $site_url,
+                'wsKey'   => $api_key,
+                'Referer' => 'https://www.rol-mar.com.pl/',
             ),
         ) );
 
         if ( is_wp_error( $response ) ) {
-            Rolmar_Logger::warning( "Download error for {$sku}: " . $response->get_error_message() . " | URL: {$download_url}", 'import' );
+            Rolmar_Logger::warning( "Download error for {$sku}: " . $response->get_error_message() . " | URL: {$original_url}", 'import' );
             return false;
         }
 

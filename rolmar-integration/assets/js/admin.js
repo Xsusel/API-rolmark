@@ -799,55 +799,80 @@
                 if (response.success) {
                     var d = response.data;
                     var html = '';
+                    var okCount = 0;
+                    var failCount = 0;
+                    if (d.attempts) {
+                        d.attempts.forEach(function (a) {
+                            if (a.is_image) okCount++; else failCount++;
+                        });
+                    }
 
                     if (d.success) {
                         html += '<div class="notice notice-success" style="padding: 15px;">';
-                        html += '<h3 style="margin-top:0; color: #00a32a;">&#10004; Zdjecie pobrane poprawnie!</h3>';
+                        html += '<h3 style="margin-top:0; color: #00a32a;">&#10004; Znaleziono dzialajaca kombinacje!</h3>';
                     } else {
                         html += '<div class="notice notice-error" style="padding: 15px;">';
-                        html += '<h3 style="margin-top:0; color: #d63638;">&#10008; Nie udalo sie pobrac zdjecia</h3>';
+                        html += '<h3 style="margin-top:0; color: #d63638;">&#10008; Zadna kombinacja nie dziala</h3>';
                     }
 
-                    // Info for technician - easy to copy
+                    // Summary for technician
                     html += '<div style="background:#f0f6fc; border:2px solid #2271b1; border-radius:6px; padding:15px; margin:10px 0;">';
-                    html += '<h4 style="margin-top:0; color:#2271b1;">Dane do wyslania technikowi Rolmar:</h4>';
+                    html += '<h4 style="margin-top:0; color:#2271b1;">Podsumowanie testu:</h4>';
                     html += '<table style="border-collapse:collapse; width:100%;">';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Data/czas testu:</td><td>' + d.timestamp + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Data/czas:</td><td>' + d.timestamp + '</td></tr>';
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">SKU:</td><td><code>' + d.sku + '</code></td></tr>';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Link do zdjecia:</td><td style="word-break:break-all;"><a href="' + d.original_url + '" target="_blank">' + d.original_url + '</a></td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">URL z API:</td><td style="word-break:break-all;"><a href="' + d.original_url + '" target="_blank">' + d.original_url + '</a></td></tr>';
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">IP serwera:</td><td>' + d.server_ip + '</td></tr>';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Wynik:</td><td><strong style="color:' + (d.success ? '#00a32a' : '#d63638') + ';">' + (d.success ? 'POBRANO' : 'BLAD') + '</strong></td></tr>';
-                    if (d.attempt && d.attempt.cf_cache_status) {
-                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Cloudflare Cache:</td><td>' + d.attempt.cf_cache_status + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Testow:</td><td>' + (d.attempts ? d.attempts.length : 0) + ' (' + okCount + ' OK, ' + failCount + ' BLAD)</td></tr>';
+                    if (d.success_combo) {
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Dziala:</td><td><strong style="color:#00a32a;">' + d.success_combo + '</strong></td></tr>';
                     }
-                    if (d.attempt && d.attempt.cf_ray) {
-                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">CF-Ray:</td><td><code>' + d.attempt.cf_ray + '</code></td></tr>';
-                    }
-                    if (d.cache_bust_info) {
-                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Cache-busting:</td><td>' + d.cache_bust_info + '</td></tr>';
+                    if (d.api_time_ms) {
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Czas API:</td><td>' + d.api_time_ms + ' ms</td></tr>';
                     }
                     html += '</table>';
                     html += '</div>';
 
-                    // Detailed attempt info
-                    var a = d.attempt || {};
-                    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">Szczegoly proby pobrania</summary>';
-                    html += '<table class="widefat striped" style="margin-top:10px; font-size:12px;">';
-                    html += '<thead><tr><th>URL</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>CF-Cache</th><th>Czas</th><th>Obraz?</th><th>Blad</th></tr></thead><tbody>';
+                    // Full matrix table (always open)
+                    html += '<h4 style="margin:15px 0 5px;">Pelna matryca testow (URL &times; naglowki):</h4>';
+                    html += '<table class="widefat striped" style="font-size:11px;">';
+                    html += '<thead><tr>';
+                    html += '<th>Wariant URL</th><th>Naglowki</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>CF-Cache</th><th>Czas</th><th>Obraz?</th><th>Blad/Tresc</th>';
+                    html += '</tr></thead><tbody>';
 
-                    var rowStyle = a.is_image ? 'background:#d4edda;' : (a.http_code === 200 ? 'background:#fff3cd;' : '');
-                    html += '<tr style="' + rowStyle + '">';
-                    html += '<td style="font-size:10px; word-break:break-all; max-width:400px;">' + (a.url || '-') + '</td>';
-                    html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
-                    html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
-                    html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
-                    html += '<td style="font-size:10px;">' + (a.cf_cache_status || '-') + '</td>';
-                    html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
-                    html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
-                    html += '<td style="font-size:10px; color:#d63638;">' + (a.error || '') + '</td>';
-                    html += '</tr>';
+                    if (d.attempts) {
+                        d.attempts.forEach(function (a) {
+                            var rowStyle = '';
+                            if (a.is_image) rowStyle = 'background:#d4edda;';
+                            else if (a.http_code === 200) rowStyle = 'background:#fff3cd;';
+                            else if (a.http_code === 404) rowStyle = '';
+                            else if (a.error) rowStyle = 'background:#f8d7da;';
 
-                    html += '</tbody></table></details>';
+                            html += '<tr style="' + rowStyle + '">';
+                            html += '<td style="font-weight:bold;">' + (a.url_label || '-') + '</td>';
+                            html += '<td>' + (a.hdr_label || '-') + '</td>';
+                            html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
+                            html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
+                            html += '<td style="font-size:10px;">' + (a.cf_cache_status || '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
+                            html += '<td style="font-size:10px; color:#d63638; max-width:250px; word-break:break-all;">' + (a.error || '') + '</td>';
+                            html += '</tr>';
+                        });
+                    }
+
+                    html += '</tbody></table>';
+
+                    // Expandable: full URLs
+                    html += '<details style="margin-top:10px;"><summary style="cursor:pointer; font-size:12px;">Pokaz pelne URL-e</summary>';
+                    html += '<table class="widefat" style="font-size:10px; margin-top:5px;">';
+                    if (d.attempts) {
+                        d.attempts.forEach(function (a) {
+                            html += '<tr><td style="font-weight:bold; white-space:nowrap;">' + (a.url_label || '') + '</td><td style="word-break:break-all;">' + (a.url || '') + '</td></tr>';
+                        });
+                    }
+                    html += '</table></details>';
                     html += '</div>';
 
                     $result.html(html);
@@ -859,7 +884,7 @@
                 $btn.prop('disabled', false).text('Pobierz testowe zdjecie');
                 var msg = 'Blad polaczenia z serwerem.';
                 if (textStatus === 'timeout') {
-                    msg = 'Przekroczono czas oczekiwania (120s).';
+                    msg = 'Przekroczono czas oczekiwania (120s). API getPhotos moze byc wolne — sprobuj ponownie (kolejne proby uzywaja cache).';
                 }
                 $result.html('<div class="notice notice-error"><p>' + msg + '</p></div>');
             }
