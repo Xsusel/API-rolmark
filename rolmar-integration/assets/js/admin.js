@@ -837,7 +837,7 @@
                     html += '<h4 style="margin:15px 0 5px;">Pelna matryca testow (URL &times; naglowki):</h4>';
                     html += '<table class="widefat striped" style="font-size:11px;">';
                     html += '<thead><tr>';
-                    html += '<th>Wariant URL</th><th>Naglowki</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>CF-Cache</th><th>Czas</th><th>Obraz?</th><th>Blad/Tresc</th>';
+                    html += '<th>Wariant URL</th><th>Naglowki</th><th>HTTP</th><th>Rozmiar</th><th>Content-Type</th><th>CF-Cache</th><th>Czas</th><th>Obraz?</th><th>Pobierz</th><th>Blad/Tresc</th>';
                     html += '</tr></thead><tbody>';
 
                     if (d.attempts) {
@@ -857,6 +857,15 @@
                             html += '<td style="font-size:10px;">' + (a.cf_cache_status || '-') + '</td>';
                             html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
                             html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
+
+                            // Download / preview button for successful image responses
+                            if (a.is_image && a.url) {
+                                var proxyUrl = rolmarAdmin.ajaxUrl + '?action=rolmar_proxy_photo&nonce=' + rolmarAdmin.nonce + '&url=' + encodeURIComponent(a.url);
+                                html += '<td style="text-align:center;"><a href="' + proxyUrl + '" target="_blank" class="button button-small" title="Otworz w nowej karcie">Podglad</a></td>';
+                            } else {
+                                html += '<td style="text-align:center;">-</td>';
+                            }
+
                             html += '<td style="font-size:10px; color:#d63638; max-width:250px; word-break:break-all;">' + (a.error || '') + '</td>';
                             html += '</tr>';
                         });

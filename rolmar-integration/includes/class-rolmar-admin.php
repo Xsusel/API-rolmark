@@ -33,6 +33,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_debug_existing_products', array( $this, 'ajax_debug_existing_products' ) );
         add_action( 'wp_ajax_rolmar_run_diagnostics', array( $this, 'ajax_run_diagnostics' ) );
         add_action( 'wp_ajax_rolmar_test_download_image', array( $this, 'ajax_test_download_image' ) );
+        add_action( 'wp_ajax_rolmar_proxy_photo', array( $this, 'ajax_proxy_photo' ) );
     }
 
     public function add_menu() {
@@ -1423,6 +1424,44 @@ class Rolmar_Admin {
             'api_time_ms'   => $api_time_ms,
             'server_ip'     => isset( $_SERVER['SERVER_ADDR'] ) ? $_SERVER['SERVER_ADDR'] : 'nieznane',
         ) );
+    }
+
+    /**
+     * Proxy a photo URL through the server so the browser can download it.
+     * The photo server requires wsKey header which the browser cannot send.
+     */
+    public function ajax_proxy_photo() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_die( 'Brak uprawnien.' );
+        }
+
+        $url = isset( $_GET['url'] ) ? esc_url_raw( $_GET['url'] ) : '';
+        if ( empty( $url ) || strpos( $url, 'photo2.rol-mar.com.pl' ) === false ) {
+            wp_die( 'Nieprawidlowy URL.' );
+        }
+
+        $api_key  = get_option( 'rolmar_api_key', '' );
+        $response = wp_remote_get( $url, array(
+            'timeout'   => 30,
+            'sslverify' => false,
+            'headers'   => array( 'wsKey' => $api_key ),
+        ) );
+
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+            wp_die( 'Blad pobierania: HTTP ' . wp_remote_retrieve_response_code( $response ) );
+        }
+
+        $body         = wp_remote_retrieve_body( $response );
+        $content_type = wp_remote_retrieve_header( $response, 'content-type' );
+        $filename     = basename( wp_parse_url( $url, PHP_URL_PATH ) );
+
+        header( 'Content-Type: ' . ( $content_type ?: 'application/octet-stream' ) );
+        header( 'Content-Disposition: inline; filename="' . $filename . '"' );
+        header( 'Content-Length: ' . strlen( $body ) );
+        echo $body;
+        exit;
     }
 
     private function run_diagnostics_checks() {
