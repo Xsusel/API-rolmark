@@ -1065,6 +1065,17 @@ class Rolmar_Product_Importer {
         $total_products = count( $grouped );
         Rolmar_Logger::info( "Grouped into {$total_products} products from {$total_photos} photo entries.", 'import' );
 
+        // Log sample URLs from first 3 products for diagnostics.
+        $sample_count = 0;
+        foreach ( $grouped as $sku => $photo_data ) {
+            if ( $sample_count >= 3 ) {
+                break;
+            }
+            $sample_urls = array_merge( $photo_data['main'], $photo_data['gallery'] );
+            Rolmar_Logger::info( "Photo URL sample [{$sku}]: " . implode( ' | ', array_slice( $sample_urls, 0, 2 ) ), 'import' );
+            $sample_count++;
+        }
+
         $updated = 0;
         $skipped = 0;
         $errors = 0;
