@@ -116,6 +116,8 @@
     color: #555;
     transition: transform 0.15s ease;
     font-size: 16px;
+    position: relative;
+    z-index: 2;
 }
 
 .rolmar-tree-node.rolmar-tree-open > .rolmar-tree-toggle {
@@ -136,8 +138,10 @@
     cursor: pointer;
     vertical-align: middle;
     font-size: 13px;
-    padding: 2px 0;
-    display: inline-block;
+    padding: 2px 4px;
+    display: inline;
+    position: relative;
+    z-index: 1;
 }
 
 .rolmar-tree-node label:hover {
