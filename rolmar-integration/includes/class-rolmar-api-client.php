@@ -61,7 +61,7 @@ class Rolmar_API_Client {
             $params['type'] = $type;
         }
 
-        $params['categorySeparator'] = '>';
+        $params['categorySeparator'] = '/';
 
         return $this->request( 'product/products.php', 'getProducts', $params );
     }
@@ -120,7 +120,7 @@ class Rolmar_API_Client {
     public function test_connection() {
         // Request a single known product to test; if none specified, request with empty params.
         return $this->request( 'product/products.php', 'getProducts', array(
-            'categorySeparator' => '>',
+            'categorySeparator' => '/',
         ) );
     }
 
