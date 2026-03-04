@@ -34,6 +34,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_run_diagnostics', array( $this, 'ajax_run_diagnostics' ) );
         add_action( 'wp_ajax_rolmar_test_download_image', array( $this, 'ajax_test_download_image' ) );
         add_action( 'wp_ajax_rolmar_proxy_photo', array( $this, 'ajax_proxy_photo' ) );
+        add_action( 'wp_ajax_rolmar_debug_category_structure', array( $this, 'ajax_debug_category_structure' ) );
     }
 
     public function add_menu() {
@@ -490,6 +491,16 @@ class Rolmar_Admin {
                     </button>
                 </p>
 
+                <hr />
+                <h3><?php esc_html_e( 'Debug kategorii', 'rolmar-integration' ); ?></h3>
+                <p class="description"><?php esc_html_e( 'Pokaż strukturę marek i kategorii z API Rolmar (do debugowania).', 'rolmar-integration' ); ?></p>
+                <p>
+                    <button type="button" id="rolmar-debug-categories" class="button button-secondary">
+                        <?php esc_html_e( 'Pokaż strukturę kategorii z API', 'rolmar-integration' ); ?>
+                    </button>
+                </p>
+                <div id="rolmar-debug-categories-result"></div>
+
                 <div id="rolmar-sync-progress" style="<?php echo $sync_in_progress ? '' : 'display:none;'; ?>">
                     <div class="rolmar-progress-bar">
                         <div class="rolmar-progress-fill" id="rolmar-progress-fill" style="width: 0%"></div>
@@ -813,6 +824,93 @@ class Rolmar_Admin {
         ) );
     }
 
+    /**
+     * Debug AJAX: show raw brand + categories structure from API.
+     */
+    public function ajax_debug_category_structure() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( 'Brak uprawnień.' );
+        }
+
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
+
+        $client   = new Rolmar_API_Client();
+        $products = $client->get_products();
+
+        if ( is_wp_error( $products ) ) {
+            wp_send_json_error( $products->get_error_message() );
+        }
+
+        if ( ! is_array( $products ) ) {
+            wp_send_json_error( 'Nieprawidłowa odpowiedź z API.' );
+        }
+
+        // Collect brands, categories, and sample products.
+        $brands = array();
+        $category_paths = array();
+        $samples = array();
+        $sample_count = 0;
+
+        foreach ( $products as $p ) {
+            $brand = isset( $p['brand'] ) ? $p['brand'] : '(brak)';
+            if ( ! isset( $brands[ $brand ] ) ) {
+                $brands[ $brand ] = 0;
+            }
+            $brands[ $brand ]++;
+
+            if ( ! empty( $p['categories'] ) && is_array( $p['categories'] ) ) {
+                foreach ( $p['categories'] as $cat ) {
+                    if ( ! isset( $category_paths[ $cat ] ) ) {
+                        $category_paths[ $cat ] = 0;
+                    }
+                    $category_paths[ $cat ]++;
+                }
+            }
+
+            // Collect first 10 products as samples.
+            if ( $sample_count < 10 ) {
+                $samples[] = array(
+                    'sku'        => isset( $p['productIndex'] ) ? $p['productIndex'] : '?',
+                    'name'       => isset( $p['name'] ) ? mb_substr( $p['name'], 0, 60 ) : '?',
+                    'brand'      => $brand,
+                    'categories' => isset( $p['categories'] ) ? $p['categories'] : array(),
+                );
+                $sample_count++;
+            }
+        }
+
+        arsort( $brands );
+        arsort( $category_paths );
+
+        // Build brand -> categories tree.
+        $brand_tree = array();
+        foreach ( $products as $p ) {
+            $brand = isset( $p['brand'] ) ? $p['brand'] : '(brak)';
+            if ( ! isset( $brand_tree[ $brand ] ) ) {
+                $brand_tree[ $brand ] = array();
+            }
+            if ( ! empty( $p['categories'] ) && is_array( $p['categories'] ) ) {
+                foreach ( $p['categories'] as $cat ) {
+                    if ( ! isset( $brand_tree[ $brand ][ $cat ] ) ) {
+                        $brand_tree[ $brand ][ $cat ] = 0;
+                    }
+                    $brand_tree[ $brand ][ $cat ]++;
+                }
+            }
+        }
+
+        wp_send_json_success( array(
+            'total_products'   => count( $products ),
+            'brands'           => $brands,
+            'category_paths'   => array_slice( $category_paths, 0, 50, true ),
+            'brand_tree'       => $brand_tree,
+            'samples'          => $samples,
+        ) );
+    }
+
     private function sort_tree_recursive( &$tree ) {
         ksort( $tree, SORT_LOCALE_STRING );
         foreach ( $tree as &$children ) {
@@ -844,10 +942,8 @@ class Rolmar_Admin {
             $html .= '<input type="checkbox" class="rolmar-cat-checkbox" data-path="' . $escaped_path . '" /> ';
             $html .= $escaped_name;
             $html .= '</label>';
-            // Mapping dropdown container (shown only when checkbox is checked).
-            $html .= '<span class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;">';
-            $html .= ' &rarr; <select class="rolmar-wc-cat-select" data-path="' . $escaped_path . '" multiple="multiple" style="min-width:250px;"></select>';
-            $html .= '</span>';
+            // Mapping container — JS builds the tag-picker widget inside.
+            $html .= '<div class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;"></div>';
 
             if ( $has_children ) {
                 $html .= $this->render_category_tree_html( $children, $current_path );

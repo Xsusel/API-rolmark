@@ -4,54 +4,129 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.1.0)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.0)');
 
     var pollInterval = null;
 
-    // --- WooCommerce Category Mapping Helpers ---
+    // --- WooCommerce Category Mapping — Searchable Tag Picker ---
+
+    var wcCats = (rolmarAdmin && rolmarAdmin.wcCategories) || [];
 
     /**
-     * Populate a <select multiple> with WooCommerce categories.
+     * Build the tag-picker widget HTML inside a .rolmar-cat-mapping container.
      */
-    function populateWcCatSelect($select) {
-        if ($select.children('option').length > 0) {
-            return; // Already populated.
-        }
-        var cats = rolmarAdmin.wcCategories || [];
-        if (!cats.length) {
-            $select.append('<option value="" disabled>Brak kategorii w WooCommerce</option>');
-            return;
-        }
-        cats.forEach(function (cat) {
-            $select.append('<option value="' + cat.id + '">' + $('<span>').text(cat.display).html() + '</option>');
+    function initTagPicker($container) {
+        if ($container.find('.rolmar-picker').length) return; // Already initialised.
+
+        var path = $container.data('path');
+        var html = '<div class="rolmar-picker" data-path="' + $('<span>').text(path).html() + '">';
+        html += '<div class="rolmar-picker-tags"></div>';
+        html += '<div class="rolmar-picker-input-wrap">';
+        html += '<input type="text" class="rolmar-picker-search" placeholder="Szukaj kategorii WC..." autocomplete="off" />';
+        html += '</div>';
+        html += '<div class="rolmar-picker-dropdown"></div>';
+        html += '</div>';
+        $container.empty().append(html);
+    }
+
+    /**
+     * Render selected tags inside the picker.
+     */
+    function renderTags($picker, selectedIds) {
+        var $tagsWrap = $picker.find('.rolmar-picker-tags');
+        $tagsWrap.empty();
+
+        selectedIds.forEach(function (id) {
+            var cat = findCatById(id);
+            if (!cat) return;
+            var tag = '<span class="rolmar-picker-tag" data-id="' + id + '">';
+            tag += '<span class="rolmar-picker-tag-text">' + $('<span>').text(cat.display).html() + '</span>';
+            tag += '<span class="rolmar-picker-tag-remove" data-id="' + id + '">&times;</span>';
+            tag += '</span>';
+            $tagsWrap.append(tag);
         });
     }
 
     /**
-     * Show/hide mapping dropdown based on checkbox state.
+     * Show filtered dropdown.
+     */
+    function showDropdown($picker, query) {
+        var $dropdown = $picker.find('.rolmar-picker-dropdown');
+        var selectedIds = getPickerSelectedIds($picker);
+        query = (query || '').toLowerCase();
+
+        var filtered = wcCats.filter(function (cat) {
+            // Don't show already selected.
+            if (selectedIds.indexOf(cat.id) !== -1) return false;
+            if (!query) return true;
+            return cat.display.toLowerCase().indexOf(query) !== -1 ||
+                   cat.name.toLowerCase().indexOf(query) !== -1;
+        });
+
+        if (!filtered.length) {
+            $dropdown.html('<div class="rolmar-picker-empty">' + (query ? 'Brak wyników' : 'Brak kategorii') + '</div>');
+        } else {
+            var html = '';
+            // Limit display to first 15 matches for performance.
+            var shown = filtered.slice(0, 15);
+            shown.forEach(function (cat) {
+                html += '<div class="rolmar-picker-option" data-id="' + cat.id + '">';
+                html += $('<span>').text(cat.display).html();
+                html += '</div>';
+            });
+            if (filtered.length > 15) {
+                html += '<div class="rolmar-picker-more">...i ' + (filtered.length - 15) + ' więcej — wpisz dokładniej</div>';
+            }
+            $dropdown.html(html);
+        }
+
+        $dropdown.addClass('rolmar-picker-dropdown-open');
+    }
+
+    function hideDropdown($picker) {
+        $picker.find('.rolmar-picker-dropdown').removeClass('rolmar-picker-dropdown-open').empty();
+    }
+
+    function findCatById(id) {
+        id = parseInt(id, 10);
+        for (var i = 0; i < wcCats.length; i++) {
+            if (wcCats[i].id === id) return wcCats[i];
+        }
+        return null;
+    }
+
+    function getPickerSelectedIds($picker) {
+        var ids = [];
+        $picker.find('.rolmar-picker-tag').each(function () {
+            ids.push(parseInt($(this).data('id'), 10));
+        });
+        return ids;
+    }
+
+    /**
+     * Show/hide mapping widget based on checkbox state.
      */
     function toggleMappingDropdown(path, checked) {
-        var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+        var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
         if (checked) {
-            var $select = $mapping.find('.rolmar-wc-cat-select');
-            populateWcCatSelect($select);
-            $mapping.show();
+            initTagPicker($container);
+            $container.show();
         } else {
-            $mapping.hide();
+            $container.hide();
         }
     }
 
     /**
-     * Sync category mapping (API path -> WC category IDs) to hidden field.
+     * Sync all category mappings to hidden field.
      */
     function syncCategoryMapping() {
         var mapping = {};
-        $('.rolmar-wc-cat-select').each(function () {
-            var $sel = $(this);
-            var path = $sel.data('path');
-            var vals = $sel.val();
-            if (vals && vals.length > 0) {
-                mapping[path] = vals.map(function (v) { return parseInt(v, 10); });
+        $('.rolmar-picker').each(function () {
+            var $picker = $(this);
+            var path = $picker.data('path');
+            var ids = getPickerSelectedIds($picker);
+            if (ids.length > 0) {
+                mapping[path] = ids;
             }
         });
         $('#rolmar_category_mapping').val(JSON.stringify(mapping));
@@ -63,34 +138,106 @@
     function restoreMappingState() {
         var raw = $('#rolmar_category_mapping').val();
         var mapping = {};
-        try {
-            mapping = JSON.parse(raw) || {};
-        } catch (e) {
-            mapping = {};
-        }
+        try { mapping = JSON.parse(raw) || {}; } catch (e) { mapping = {}; }
 
         $.each(mapping, function (path, wcIds) {
-            var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
-            if (!$mapping.length) return;
+            var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+            if (!$container.length) return;
 
-            var $select = $mapping.find('.rolmar-wc-cat-select');
-            populateWcCatSelect($select);
+            initTagPicker($container);
+            var $picker = $container.find('.rolmar-picker');
+            renderTags($picker, wcIds);
 
-            // Set selected values.
-            var strIds = wcIds.map(function (id) { return String(id); });
-            $select.val(strIds);
-
-            // Show the mapping dropdown if this category is checked.
             var $checkbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
             if ($checkbox.is(':checked')) {
-                $mapping.show();
+                $container.show();
             }
         });
     }
 
-    // Listen for changes on WC category selects.
-    $(document).on('change', '.rolmar-wc-cat-select', function () {
+    // --- Tag Picker Event Handlers ---
+
+    // Focus search on click anywhere in picker.
+    $(document).on('click', '.rolmar-picker', function (e) {
+        if (!$(e.target).hasClass('rolmar-picker-tag-remove')) {
+            $(this).find('.rolmar-picker-search').focus();
+        }
+    });
+
+    // Search input -> show/filter dropdown.
+    $(document).on('input', '.rolmar-picker-search', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        showDropdown($picker, $(this).val());
+    });
+
+    // Focus -> show dropdown.
+    $(document).on('focus', '.rolmar-picker-search', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        showDropdown($picker, $(this).val());
+    });
+
+    // Click outside -> close dropdown.
+    $(document).on('mousedown', function (e) {
+        if (!$(e.target).closest('.rolmar-picker').length) {
+            $('.rolmar-picker-dropdown').removeClass('rolmar-picker-dropdown-open').empty();
+        }
+    });
+
+    // Select option from dropdown.
+    $(document).on('mousedown', '.rolmar-picker-option', function (e) {
+        e.preventDefault(); // Prevent blur on search input.
+        var $picker = $(this).closest('.rolmar-picker');
+        var id = parseInt($(this).data('id'), 10);
+        var ids = getPickerSelectedIds($picker);
+        ids.push(id);
+        renderTags($picker, ids);
+        var $search = $picker.find('.rolmar-picker-search');
+        $search.val('');
+        showDropdown($picker, '');
         syncCategoryMapping();
+    });
+
+    // Remove tag.
+    $(document).on('click', '.rolmar-picker-tag-remove', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        $(this).closest('.rolmar-picker-tag').remove();
+        syncCategoryMapping();
+    });
+
+    // Keyboard navigation in dropdown.
+    $(document).on('keydown', '.rolmar-picker-search', function (e) {
+        var $picker = $(this).closest('.rolmar-picker');
+        var $dropdown = $picker.find('.rolmar-picker-dropdown');
+        var $active = $dropdown.find('.rolmar-picker-option.active');
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if ($active.length) {
+                var $next = $active.removeClass('active').next('.rolmar-picker-option');
+                if ($next.length) $next.addClass('active');
+                else $dropdown.find('.rolmar-picker-option').first().addClass('active');
+            } else {
+                $dropdown.find('.rolmar-picker-option').first().addClass('active');
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if ($active.length) {
+                var $prev = $active.removeClass('active').prev('.rolmar-picker-option');
+                if ($prev.length) $prev.addClass('active');
+                else $dropdown.find('.rolmar-picker-option').last().addClass('active');
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if ($active.length) {
+                $active.trigger('mousedown');
+            }
+        } else if (e.key === 'Escape') {
+            hideDropdown($picker);
+        } else if (e.key === 'Backspace' && !$(this).val()) {
+            // Remove last tag on backspace in empty field.
+            $picker.find('.rolmar-picker-tag').last().remove();
+            syncCategoryMapping();
+        }
     });
 
     // Test Connection
@@ -1008,6 +1155,89 @@
                 }
                 $result.html('<div class="notice notice-error"><p>' + msg + '</p></div>');
             }
+        });
+    });
+
+    // --- Debug Category Structure ---
+    $('#rolmar-debug-categories').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-debug-categories-result');
+
+        $btn.prop('disabled', true).text('Pobieranie danych z API...');
+        $result.html('<p><span class="spinner is-active" style="float:none;"></span> Pobieram produkty z API, to może chwilę potrwać...</p>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_debug_category_structure',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
+
+            if (!response.success) {
+                $result.html('<div class="notice notice-error"><p>' + (response.data || 'Błąd') + '</p></div>');
+                return;
+            }
+
+            var d = response.data;
+            var html = '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:20px;margin-top:10px;">';
+
+            // Summary
+            html += '<h3 style="margin-top:0;">Podsumowanie API</h3>';
+            html += '<p><strong>Łączna liczba produktów:</strong> ' + d.total_products + '</p>';
+
+            // Brands table
+            html += '<h3>Marki (brand) — odpowiadają kategoriom z panelu Rolmar</h3>';
+            html += '<table class="widefat striped" style="max-width:600px;"><thead><tr><th>Marka</th><th style="text-align:right;">Produkty</th></tr></thead><tbody>';
+            $.each(d.brands, function (brand, count) {
+                html += '<tr><td><strong>' + $('<span>').text(brand).html() + '</strong></td>';
+                html += '<td style="text-align:right;">' + count + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            // Brand -> categories tree
+            html += '<h3 style="margin-top:20px;">Drzewko: Marka &rarr; Kategorie (ścieżki z pola categories)</h3>';
+            html += '<div style="max-height:400px;overflow-y:auto;border:1px solid #ddd;padding:10px;background:#f9f9f9;">';
+            $.each(d.brand_tree, function (brand, cats) {
+                var catCount = Object.keys(cats).length;
+                var brandTotal = 0;
+                $.each(cats, function (_, c) { brandTotal += c; });
+
+                html += '<details style="margin-bottom:8px;">';
+                html += '<summary style="cursor:pointer;font-weight:bold;font-size:14px;padding:4px 0;">';
+                html += $('<span>').text(brand).html() + ' <span style="color:#999;font-weight:normal;">(' + brandTotal + ' produktów, ' + catCount + ' ścieżek kategorii)</span>';
+                html += '</summary>';
+                html += '<ul style="margin:5px 0 5px 20px;font-size:12px;">';
+                $.each(cats, function (catPath, count) {
+                    html += '<li><code>' + $('<span>').text(catPath).html() + '</code> <span style="color:#999;">(' + count + ')</span></li>';
+                });
+                html += '</ul></details>';
+            });
+            html += '</div>';
+
+            // Samples
+            html += '<h3 style="margin-top:20px;">Próbka produktów (10 pierwszych)</h3>';
+            html += '<table class="widefat striped" style="font-size:12px;"><thead><tr><th>SKU</th><th>Nazwa</th><th>Brand</th><th>Categories</th></tr></thead><tbody>';
+            d.samples.forEach(function (s) {
+                html += '<tr><td><code>' + $('<span>').text(s.sku).html() + '</code></td>';
+                html += '<td>' + $('<span>').text(s.name).html() + '</td>';
+                html += '<td><strong>' + $('<span>').text(s.brand).html() + '</strong></td>';
+                html += '<td style="font-size:11px;">' + $('<span>').text(JSON.stringify(s.categories)).html() + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            // Top category paths
+            html += '<h3 style="margin-top:20px;">Najczęstsze ścieżki kategorii (top 50)</h3>';
+            html += '<table class="widefat striped" style="max-width:700px;font-size:12px;"><thead><tr><th>Ścieżka</th><th style="text-align:right;">Produkty</th></tr></thead><tbody>';
+            $.each(d.category_paths, function (path, count) {
+                html += '<tr><td><code>' + $('<span>').text(path).html() + '</code></td>';
+                html += '<td style="text-align:right;">' + count + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            html += '</div>';
+            $result.html(html);
+        }).fail(function () {
+            $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
+            $result.html('<div class="notice notice-error"><p>Błąd połączenia</p></div>');
         });
     });
 
