@@ -158,12 +158,20 @@ class Rolmar_Admin {
             ),
         ) );
 
+        $this->add_field( 'auto_create_categories', __( 'Auto-tworzenie kategorii', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'options' => array(
+                'yes' => __( 'Tak — twórz hierarchię kategorii z API automatycznie', 'rolmar-integration' ),
+                'no'  => __( 'Nie — używaj tylko ręcznego mapowania', 'rolmar-integration' ),
+            ),
+            'description' => __( 'Gdy włączone, wtyczka automatycznie tworzy kategorie WooCommerce odwzorowujące strukturę z API Rolmar (np. URSUS → C-330 → Hamulce). Produkt z wieloma ścieżkami kategorii zostanie przypisany do wszystkich, bez duplikacji.', 'rolmar-integration' ),
+        ) );
+
         // Category Mapping section.
         add_settings_section(
             'rolmar_category_section',
             __( 'Mapowanie kategorii', 'rolmar-integration' ),
             function () {
-                echo '<p>' . esc_html__( 'Zaznacz kategorie API do importu i przypisz je do istniejących kategorii WooCommerce. Wtyczka NIE tworzy nowych kategorii — używa tylko tych, które już istnieją w sklepie.', 'rolmar-integration' ) . '</p>';
+                echo '<p>' . esc_html__( 'Zaznacz kategorie API do importu i przypisz je do kategorii WooCommerce. Jeśli włączone jest auto-tworzenie kategorii, mapowanie jest opcjonalne — niezmapowane ścieżki zostaną utworzone automatycznie.', 'rolmar-integration' ) . '</p>';
             },
             'rolmar-integration'
         );

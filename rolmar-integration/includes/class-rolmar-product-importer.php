@@ -409,34 +409,55 @@ class Rolmar_Product_Importer {
     }
 
     /**
-     * Set product categories using the saved category mapping.
+     * Set product categories from API paths.
      *
-     * Instead of creating categories from API paths, this looks up the mapping
-     * configured in admin settings and assigns existing WooCommerce categories.
+     * Two modes:
+     * 1. If category mapping exists — use mapped WooCommerce categories.
+     * 2. If auto-create is enabled (or no mapping) — create WooCommerce categories
+     *    from API path hierarchy automatically.
+     *
+     * A product with multiple category paths gets assigned to ALL matching
+     * categories (no product duplication).
      *
      * @param int   $product_id  WooCommerce product ID.
-     * @param array $categories  Array of category path strings from API.
+     * @param array $categories  Array of category path strings from API (e.g. "URSUS/C-330/Hamulce").
      */
     private function set_product_categories( $product_id, $categories ) {
-        if ( empty( $this->category_mapping ) ) {
-            return;
-        }
-
         $term_ids = array();
+        $auto_create = get_option( 'rolmar_auto_create_categories', 'yes' ) === 'yes';
 
         foreach ( $categories as $product_path ) {
             $product_path = trim( $product_path );
-
-            // Check for exact match first.
-            if ( isset( $this->category_mapping[ $product_path ] ) ) {
-                $term_ids = array_merge( $term_ids, $this->category_mapping[ $product_path ] );
+            if ( empty( $product_path ) ) {
                 continue;
             }
 
-            // Check if any mapped path is a parent of this product's path.
-            foreach ( $this->category_mapping as $mapped_path => $wc_ids ) {
-                if ( strpos( $product_path, $mapped_path . '/' ) === 0 || $product_path === $mapped_path ) {
-                    $term_ids = array_merge( $term_ids, $wc_ids );
+            $matched = false;
+
+            // Try mapping first (if configured).
+            if ( ! empty( $this->category_mapping ) ) {
+                // Exact match.
+                if ( isset( $this->category_mapping[ $product_path ] ) ) {
+                    $term_ids = array_merge( $term_ids, $this->category_mapping[ $product_path ] );
+                    $matched  = true;
+                }
+
+                // Parent path match.
+                if ( ! $matched ) {
+                    foreach ( $this->category_mapping as $mapped_path => $wc_ids ) {
+                        if ( strpos( $product_path, $mapped_path . '/' ) === 0 || $product_path === $mapped_path ) {
+                            $term_ids = array_merge( $term_ids, $wc_ids );
+                            $matched  = true;
+                        }
+                    }
+                }
+            }
+
+            // Auto-create WooCommerce category hierarchy from API path.
+            if ( ! $matched && $auto_create ) {
+                $leaf_term_id = $this->ensure_category_hierarchy( $product_path );
+                if ( $leaf_term_id ) {
+                    $term_ids[] = $leaf_term_id;
                 }
             }
         }
@@ -444,7 +465,6 @@ class Rolmar_Product_Importer {
         $term_ids = array_unique( array_filter( array_map( 'absint', $term_ids ) ) );
 
         if ( ! empty( $term_ids ) ) {
-            // Verify that all term IDs actually exist.
             $valid_ids = array();
             foreach ( $term_ids as $tid ) {
                 if ( term_exists( $tid, 'product_cat' ) ) {
@@ -455,6 +475,84 @@ class Rolmar_Product_Importer {
                 wp_set_object_terms( $product_id, $valid_ids, 'product_cat' );
             }
         }
+    }
+
+    /**
+     * Ensure a full category hierarchy exists in WooCommerce and return the leaf term ID.
+     *
+     * Given a path like "URSUS/C-330/Hamulce", creates:
+     *   URSUS (parent=0)
+     *     └── C-330 (parent=URSUS)
+     *           └── Hamulce (parent=C-330)
+     *
+     * Uses a static cache to avoid repeated DB lookups within the same import run.
+     *
+     * @param string $path  Category path with '/' separator.
+     * @return int|false  Term ID of the deepest (leaf) category, or false on failure.
+     */
+    private function ensure_category_hierarchy( $path ) {
+        static $cache = array();
+
+        if ( isset( $cache[ $path ] ) ) {
+            return $cache[ $path ];
+        }
+
+        $parts     = array_filter( array_map( 'trim', explode( '/', $path ) ) );
+        $parent_id = 0;
+        $term_id   = 0;
+
+        foreach ( $parts as $part ) {
+            $slug = sanitize_title( $part );
+
+            // Look for existing term with this parent.
+            $existing = get_term_by( 'slug', $slug, 'product_cat' );
+
+            if ( $existing && (int) $existing->parent === $parent_id ) {
+                $term_id   = (int) $existing->term_id;
+                $parent_id = $term_id;
+                continue;
+            }
+
+            // Slug might exist under a different parent — search by name + parent.
+            $terms = get_terms( array(
+                'taxonomy'   => 'product_cat',
+                'name'       => $part,
+                'parent'     => $parent_id,
+                'hide_empty' => false,
+                'number'     => 1,
+            ) );
+
+            if ( ! empty( $terms ) && ! is_wp_error( $terms ) ) {
+                $term_id   = (int) $terms[0]->term_id;
+                $parent_id = $term_id;
+                continue;
+            }
+
+            // Create the term.
+            $result = wp_insert_term( $part, 'product_cat', array(
+                'parent' => $parent_id,
+                'slug'   => $slug . ( $parent_id ? '-' . $parent_id : '' ),
+            ) );
+
+            if ( is_wp_error( $result ) ) {
+                // If slug conflict, try with unique suffix.
+                $result = wp_insert_term( $part, 'product_cat', array(
+                    'parent' => $parent_id,
+                ) );
+            }
+
+            if ( is_wp_error( $result ) ) {
+                Rolmar_Logger::warning( "Failed to create category '{$part}' (parent={$parent_id}): " . $result->get_error_message(), 'import' );
+                $cache[ $path ] = false;
+                return false;
+            }
+
+            $term_id   = (int) $result['term_id'];
+            $parent_id = $term_id;
+        }
+
+        $cache[ $path ] = $term_id;
+        return $term_id;
     }
 
     /**
