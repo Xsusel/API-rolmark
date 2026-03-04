@@ -1158,6 +1158,89 @@
         });
     });
 
+    // --- Debug Category Structure ---
+    $('#rolmar-debug-categories').on('click', function () {
+        var $btn = $(this);
+        var $result = $('#rolmar-debug-categories-result');
+
+        $btn.prop('disabled', true).text('Pobieranie danych z API...');
+        $result.html('<p><span class="spinner is-active" style="float:none;"></span> Pobieram produkty z API, to może chwilę potrwać...</p>');
+
+        $.post(rolmarAdmin.ajaxUrl, {
+            action: 'rolmar_debug_category_structure',
+            nonce: rolmarAdmin.nonce
+        }, function (response) {
+            $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
+
+            if (!response.success) {
+                $result.html('<div class="notice notice-error"><p>' + (response.data || 'Błąd') + '</p></div>');
+                return;
+            }
+
+            var d = response.data;
+            var html = '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:20px;margin-top:10px;">';
+
+            // Summary
+            html += '<h3 style="margin-top:0;">Podsumowanie API</h3>';
+            html += '<p><strong>Łączna liczba produktów:</strong> ' + d.total_products + '</p>';
+
+            // Brands table
+            html += '<h3>Marki (brand) — odpowiadają kategoriom z panelu Rolmar</h3>';
+            html += '<table class="widefat striped" style="max-width:600px;"><thead><tr><th>Marka</th><th style="text-align:right;">Produkty</th></tr></thead><tbody>';
+            $.each(d.brands, function (brand, count) {
+                html += '<tr><td><strong>' + $('<span>').text(brand).html() + '</strong></td>';
+                html += '<td style="text-align:right;">' + count + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            // Brand -> categories tree
+            html += '<h3 style="margin-top:20px;">Drzewko: Marka &rarr; Kategorie (ścieżki z pola categories)</h3>';
+            html += '<div style="max-height:400px;overflow-y:auto;border:1px solid #ddd;padding:10px;background:#f9f9f9;">';
+            $.each(d.brand_tree, function (brand, cats) {
+                var catCount = Object.keys(cats).length;
+                var brandTotal = 0;
+                $.each(cats, function (_, c) { brandTotal += c; });
+
+                html += '<details style="margin-bottom:8px;">';
+                html += '<summary style="cursor:pointer;font-weight:bold;font-size:14px;padding:4px 0;">';
+                html += $('<span>').text(brand).html() + ' <span style="color:#999;font-weight:normal;">(' + brandTotal + ' produktów, ' + catCount + ' ścieżek kategorii)</span>';
+                html += '</summary>';
+                html += '<ul style="margin:5px 0 5px 20px;font-size:12px;">';
+                $.each(cats, function (catPath, count) {
+                    html += '<li><code>' + $('<span>').text(catPath).html() + '</code> <span style="color:#999;">(' + count + ')</span></li>';
+                });
+                html += '</ul></details>';
+            });
+            html += '</div>';
+
+            // Samples
+            html += '<h3 style="margin-top:20px;">Próbka produktów (10 pierwszych)</h3>';
+            html += '<table class="widefat striped" style="font-size:12px;"><thead><tr><th>SKU</th><th>Nazwa</th><th>Brand</th><th>Categories</th></tr></thead><tbody>';
+            d.samples.forEach(function (s) {
+                html += '<tr><td><code>' + $('<span>').text(s.sku).html() + '</code></td>';
+                html += '<td>' + $('<span>').text(s.name).html() + '</td>';
+                html += '<td><strong>' + $('<span>').text(s.brand).html() + '</strong></td>';
+                html += '<td style="font-size:11px;">' + $('<span>').text(JSON.stringify(s.categories)).html() + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            // Top category paths
+            html += '<h3 style="margin-top:20px;">Najczęstsze ścieżki kategorii (top 50)</h3>';
+            html += '<table class="widefat striped" style="max-width:700px;font-size:12px;"><thead><tr><th>Ścieżka</th><th style="text-align:right;">Produkty</th></tr></thead><tbody>';
+            $.each(d.category_paths, function (path, count) {
+                html += '<tr><td><code>' + $('<span>').text(path).html() + '</code></td>';
+                html += '<td style="text-align:right;">' + count + '</td></tr>';
+            });
+            html += '</tbody></table>';
+
+            html += '</div>';
+            $result.html(html);
+        }).fail(function () {
+            $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
+            $result.html('<div class="notice notice-error"><p>Błąd połączenia</p></div>');
+        });
+    });
+
     // Auto-poll if sync is already in progress on page load.
     $(document).ready(function () {
         if ($('#rolmar-sync-progress').is(':visible')) {
