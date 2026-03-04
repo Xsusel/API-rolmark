@@ -346,11 +346,11 @@ class Rolmar_Admin {
                 <span id="rolmar-tree-status" class="rolmar-status-message"></span>
             </p>
             <p class="description">
-                <?php esc_html_e( '1. Zaznacz kategorie API, które chcesz importować.', 'rolmar-integration' ); ?>
+                <?php esc_html_e( 'Zaznacz kategorie API, które chcesz importować. Produkty z niezaznaczonych kategorii NIE będą importowane.', 'rolmar-integration' ); ?>
                 <br />
-                <?php esc_html_e( '2. Dla każdej zaznaczonej kategorii wybierz kategorię WooCommerce, do której mają trafić produkty.', 'rolmar-integration' ); ?>
-                <br />
-                <?php esc_html_e( 'Produkty z niezaznaczonych kategorii NIE będą importowane.', 'rolmar-integration' ); ?>
+                <span id="rolmar-mapping-hint">
+                    <?php esc_html_e( 'Dla każdej zaznaczonej kategorii wybierz kategorię WooCommerce, do której mają trafić produkty.', 'rolmar-integration' ); ?>
+                </span>
                 <br />
                 <strong><?php esc_html_e( 'Wybrano:', 'rolmar-integration' ); ?></strong>
                 <span id="rolmar-category-count"></span>

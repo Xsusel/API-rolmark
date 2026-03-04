@@ -108,6 +108,14 @@
      */
     function toggleMappingDropdown(path, checked) {
         var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+        var autoCreate = $('#rolmar_auto_create_categories').val();
+
+        // When auto-create is on, never show mapping pickers.
+        if (autoCreate === 'yes') {
+            $container.hide();
+            return;
+        }
+
         if (checked) {
             initTagPicker($container);
             $container.show();
@@ -1251,31 +1259,29 @@
     });
 
     // --- Auto-create categories toggle ---
-    // When auto-create is "yes", hide the entire category mapping section.
-    function toggleCategorySectionVisibility() {
+    // When auto-create is "yes", hide only the mapping pickers (tag pickers),
+    // but keep the category tree with checkboxes visible for filtering.
+    function toggleMappingPickersVisibility() {
         var autoCreate = $('#rolmar_auto_create_categories').val();
-        var $section = $('#rolmar-category-tree-wrap').closest('tr');
-        // Also hide the section heading if possible.
-        var $sectionHeader = $section.closest('table').prev('h2');
-
         if (autoCreate === 'yes') {
-            $section.hide();
-            // Hide section header if it's the category mapping header.
-            if ($sectionHeader.length && $sectionHeader.text().indexOf('Mapowanie') !== -1) {
-                $sectionHeader.hide();
-                $sectionHeader.next('p').hide(); // description paragraph
-            }
+            // Hide all mapping tag pickers.
+            $('.rolmar-cat-mapping').hide();
+            // Update description text.
+            $('#rolmar-mapping-hint').hide();
         } else {
-            $section.show();
-            if ($sectionHeader.length && $sectionHeader.text().indexOf('Mapowanie') !== -1) {
-                $sectionHeader.show();
-                $sectionHeader.next('p').show();
-            }
+            // Show mapping pickers for checked categories.
+            $('.rolmar-cat-checkbox:checked').each(function () {
+                var path = $(this).data('path');
+                var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+                initTagPicker($container);
+                $container.show();
+            });
+            $('#rolmar-mapping-hint').show();
         }
     }
 
     $(document).on('change', '#rolmar_auto_create_categories', function () {
-        toggleCategorySectionVisibility();
+        toggleMappingPickersVisibility();
     });
 
     // --- Ensure hidden fields are synced before form submit ---
@@ -1301,8 +1307,8 @@
         var initialCount = JSON.parse($('#rolmar_allowed_categories').val() || '[]').length;
         updateSelectionCount(initialCount);
 
-        // Toggle category section visibility based on auto-create setting.
-        toggleCategorySectionVisibility();
+        // Hide/show mapping pickers based on auto-create setting.
+        toggleMappingPickersVisibility();
     });
 
 })(jQuery);
