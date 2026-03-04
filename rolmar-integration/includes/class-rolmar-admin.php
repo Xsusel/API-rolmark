@@ -157,12 +157,12 @@ class Rolmar_Admin {
             ),
         ) );
 
-        // Category Filter section.
+        // Category Mapping section.
         add_settings_section(
             'rolmar_category_section',
-            __( 'Filtr kategorii', 'rolmar-integration' ),
+            __( 'Mapowanie kategorii', 'rolmar-integration' ),
             function () {
-                echo '<p>' . esc_html__( 'Wybierz kategorie produktów do importu. Jeśli żadna kategoria nie jest zaznaczona, importowane będą wszystkie produkty.', 'rolmar-integration' ) . '</p>';
+                echo '<p>' . esc_html__( 'Zaznacz kategorie API do importu i przypisz je do istniejących kategorii WooCommerce. Wtyczka NIE tworzy nowych kategorii — używa tylko tych, które już istnieją w sklepie.', 'rolmar-integration' ) . '</p>';
             },
             'rolmar-integration'
         );
@@ -171,9 +171,13 @@ class Rolmar_Admin {
             'sanitize_callback' => array( $this, 'sanitize_allowed_categories' ),
         ) );
 
+        register_setting( 'rolmar_settings', 'rolmar_category_mapping', array(
+            'sanitize_callback' => array( $this, 'sanitize_category_mapping' ),
+        ) );
+
         add_settings_field(
             'rolmar_allowed_categories',
-            __( 'Dozwolone kategorie', 'rolmar-integration' ),
+            __( 'Kategorie do importu', 'rolmar-integration' ),
             array( $this, 'render_category_tree_field' ),
             'rolmar-integration',
             'rolmar_category_section'
@@ -290,8 +294,38 @@ class Rolmar_Admin {
         return array_map( 'sanitize_text_field', array_values( array_unique( $value ) ) );
     }
 
+    public function sanitize_category_mapping( $value ) {
+        if ( empty( $value ) ) {
+            return array();
+        }
+        if ( is_string( $value ) ) {
+            $value = json_decode( stripslashes( $value ), true );
+        }
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+        // Sanitize: { "api/path": [wc_term_id, ...], ... }
+        $clean = array();
+        foreach ( $value as $api_path => $wc_ids ) {
+            $api_path = sanitize_text_field( $api_path );
+            if ( empty( $api_path ) ) {
+                continue;
+            }
+            if ( ! is_array( $wc_ids ) ) {
+                $wc_ids = array( $wc_ids );
+            }
+            $wc_ids = array_map( 'absint', $wc_ids );
+            $wc_ids = array_filter( $wc_ids );
+            if ( ! empty( $wc_ids ) ) {
+                $clean[ $api_path ] = array_values( $wc_ids );
+            }
+        }
+        return $clean;
+    }
+
     public function render_category_tree_field() {
         $allowed    = get_option( 'rolmar_allowed_categories', array() );
+        $mapping    = get_option( 'rolmar_category_mapping', array() );
         $cached_html = get_option( 'rolmar_category_tree_html', '' );
         ?>
         <div id="rolmar-category-tree-wrap">
@@ -303,7 +337,11 @@ class Rolmar_Admin {
                 <span id="rolmar-tree-status" class="rolmar-status-message"></span>
             </p>
             <p class="description">
-                <?php esc_html_e( 'Zaznacz kategorie wyższego poziomu, aby automatycznie zaznaczyć wszystkie podkategorie. Możesz następnie odznaczyć poszczególne podkategorie.', 'rolmar-integration' ); ?>
+                <?php esc_html_e( '1. Zaznacz kategorie API, które chcesz importować.', 'rolmar-integration' ); ?>
+                <br />
+                <?php esc_html_e( '2. Dla każdej zaznaczonej kategorii wybierz kategorię WooCommerce, do której mają trafić produkty.', 'rolmar-integration' ); ?>
+                <br />
+                <?php esc_html_e( 'Produkty z niezaznaczonych kategorii NIE będą importowane.', 'rolmar-integration' ); ?>
                 <br />
                 <strong><?php esc_html_e( 'Wybrano:', 'rolmar-integration' ); ?></strong>
                 <span id="rolmar-category-count"></span>
@@ -326,6 +364,7 @@ class Rolmar_Admin {
                 ?>
             </div>
             <input type="hidden" id="rolmar_allowed_categories" name="rolmar_allowed_categories" value="<?php echo esc_attr( wp_json_encode( $allowed ) ); ?>" />
+            <input type="hidden" id="rolmar_category_mapping" name="rolmar_category_mapping" value="<?php echo esc_attr( wp_json_encode( $mapping ) ); ?>" />
         </div>
         <?php
     }
@@ -518,10 +557,48 @@ class Rolmar_Admin {
             true
         );
 
+        // Get existing WooCommerce product categories for mapping UI.
+        $wc_categories = array();
+        $terms = get_terms( array(
+            'taxonomy'   => 'product_cat',
+            'hide_empty' => false,
+            'orderby'    => 'name',
+            'order'      => 'ASC',
+        ) );
+        if ( ! is_wp_error( $terms ) ) {
+            // Build flat list with indented names for hierarchy.
+            $cat_hierarchy = array();
+            foreach ( $terms as $term ) {
+                $cat_hierarchy[ $term->term_id ] = array(
+                    'id'     => $term->term_id,
+                    'name'   => $term->name,
+                    'parent' => $term->parent,
+                    'slug'   => $term->slug,
+                );
+            }
+            // Build display names with parent path.
+            foreach ( $cat_hierarchy as $id => &$cat ) {
+                $parts   = array( $cat['name'] );
+                $current = $cat;
+                while ( $current['parent'] && isset( $cat_hierarchy[ $current['parent'] ] ) ) {
+                    $current = $cat_hierarchy[ $current['parent'] ];
+                    array_unshift( $parts, $current['name'] );
+                }
+                $cat['display'] = implode( ' > ', $parts );
+            }
+            unset( $cat );
+            // Sort by display name.
+            usort( $cat_hierarchy, function ( $a, $b ) {
+                return strcasecmp( $a['display'], $b['display'] );
+            } );
+            $wc_categories = array_values( $cat_hierarchy );
+        }
+
         wp_localize_script( 'rolmar-admin', 'rolmarAdmin', array(
-            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-            'nonce'   => wp_create_nonce( 'rolmar_admin_nonce' ),
-            'i18n'    => array(
+            'ajaxUrl'       => admin_url( 'admin-ajax.php' ),
+            'nonce'         => wp_create_nonce( 'rolmar_admin_nonce' ),
+            'wcCategories'  => $wc_categories,
+            'i18n'          => array(
                 'testing'            => __( 'Testowanie...', 'rolmar-integration' ),
                 'success'            => __( 'Połączenie udane!', 'rolmar-integration' ),
                 'error'              => __( 'Błąd połączenia', 'rolmar-integration' ),
@@ -767,6 +844,10 @@ class Rolmar_Admin {
             $html .= '<input type="checkbox" class="rolmar-cat-checkbox" data-path="' . $escaped_path . '" /> ';
             $html .= $escaped_name;
             $html .= '</label>';
+            // Mapping dropdown container (shown only when checkbox is checked).
+            $html .= '<span class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;">';
+            $html .= ' &rarr; <select class="rolmar-wc-cat-select" data-path="' . $escaped_path . '" multiple="multiple" style="min-width:250px;"></select>';
+            $html .= '</span>';
 
             if ( $has_children ) {
                 $html .= $this->render_category_tree_html( $children, $current_path );

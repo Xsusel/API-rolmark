@@ -4,9 +4,94 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.0.3)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.1.0)');
 
     var pollInterval = null;
+
+    // --- WooCommerce Category Mapping Helpers ---
+
+    /**
+     * Populate a <select multiple> with WooCommerce categories.
+     */
+    function populateWcCatSelect($select) {
+        if ($select.children('option').length > 0) {
+            return; // Already populated.
+        }
+        var cats = rolmarAdmin.wcCategories || [];
+        if (!cats.length) {
+            $select.append('<option value="" disabled>Brak kategorii w WooCommerce</option>');
+            return;
+        }
+        cats.forEach(function (cat) {
+            $select.append('<option value="' + cat.id + '">' + $('<span>').text(cat.display).html() + '</option>');
+        });
+    }
+
+    /**
+     * Show/hide mapping dropdown based on checkbox state.
+     */
+    function toggleMappingDropdown(path, checked) {
+        var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+        if (checked) {
+            var $select = $mapping.find('.rolmar-wc-cat-select');
+            populateWcCatSelect($select);
+            $mapping.show();
+        } else {
+            $mapping.hide();
+        }
+    }
+
+    /**
+     * Sync category mapping (API path -> WC category IDs) to hidden field.
+     */
+    function syncCategoryMapping() {
+        var mapping = {};
+        $('.rolmar-wc-cat-select').each(function () {
+            var $sel = $(this);
+            var path = $sel.data('path');
+            var vals = $sel.val();
+            if (vals && vals.length > 0) {
+                mapping[path] = vals.map(function (v) { return parseInt(v, 10); });
+            }
+        });
+        $('#rolmar_category_mapping').val(JSON.stringify(mapping));
+    }
+
+    /**
+     * Restore saved mapping from hidden field.
+     */
+    function restoreMappingState() {
+        var raw = $('#rolmar_category_mapping').val();
+        var mapping = {};
+        try {
+            mapping = JSON.parse(raw) || {};
+        } catch (e) {
+            mapping = {};
+        }
+
+        $.each(mapping, function (path, wcIds) {
+            var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+            if (!$mapping.length) return;
+
+            var $select = $mapping.find('.rolmar-wc-cat-select');
+            populateWcCatSelect($select);
+
+            // Set selected values.
+            var strIds = wcIds.map(function (id) { return String(id); });
+            $select.val(strIds);
+
+            // Show the mapping dropdown if this category is checked.
+            var $checkbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
+            if ($checkbox.is(':checked')) {
+                $mapping.show();
+            }
+        });
+    }
+
+    // Listen for changes on WC category selects.
+    $(document).on('change', '.rolmar-wc-cat-select', function () {
+        syncCategoryMapping();
+    });
 
     // Test Connection
     $('#rolmar-test-connection').on('click', function () {
@@ -237,10 +322,14 @@
         console.log('[Rolmar] Rozwinięto ' + $('.rolmar-tree-node').length + ' węzłów');
     });
 
-    // Parent-child checkbox logic + sync hidden field.
+    // Parent-child checkbox logic + sync hidden field + toggle mapping.
     $(document).on('change', '.rolmar-cat-checkbox', function () {
         var $this = $(this);
         var isChecked = $this.is(':checked');
+        var path = $this.data('path');
+
+        // Toggle mapping dropdown for this checkbox.
+        toggleMappingDropdown(path, isChecked);
 
         // Find all descendant checkboxes in the child tree list (not including this checkbox).
         var $treeNode = $this.closest('.rolmar-tree-node');
@@ -248,13 +337,17 @@
 
         if ($childList.length) {
             // Check/uncheck all descendant checkboxes in child nodes.
-            $childList.find('.rolmar-cat-checkbox').prop('checked', isChecked);
+            $childList.find('.rolmar-cat-checkbox').each(function () {
+                $(this).prop('checked', isChecked);
+                toggleMappingDropdown($(this).data('path'), isChecked);
+            });
         }
 
         // Update parent states (indeterminate / checked).
         updateParentCheckboxes($this);
 
         syncCategorySelection();
+        syncCategoryMapping();
     });
 
     function updateParentCheckboxes($child) {
@@ -343,6 +436,7 @@
         }
 
         if (!allowed || !allowed.length) {
+            restoreMappingState();
             return;
         }
 
@@ -354,16 +448,33 @@
             }
         });
 
+        // Also check all children of checked parent paths.
+        allowed.forEach(function (parentPath) {
+            $('.rolmar-cat-checkbox').each(function () {
+                var p = $(this).data('path');
+                if (p && p.indexOf(parentPath + '/') === 0) {
+                    $(this).prop('checked', true);
+                }
+            });
+        });
+
         // Update parent indeterminate states bottom-up.
-        // Process deepest nodes first by iterating leaf checkboxes.
         $('.rolmar-cat-checkbox:checked').each(function () {
             updateParentCheckboxes($(this));
+        });
+
+        // Show mapping dropdowns for checked categories.
+        $('.rolmar-cat-checkbox:checked').each(function () {
+            toggleMappingDropdown($(this).data('path'), true);
         });
 
         // Auto-expand nodes that have checked children.
         $('.rolmar-cat-checkbox:checked').each(function () {
             $(this).parents('.rolmar-tree-node').addClass('rolmar-tree-open');
         });
+
+        // Restore saved WC category mapping.
+        restoreMappingState();
     }
 
     function updateSelectionCount(count) {
