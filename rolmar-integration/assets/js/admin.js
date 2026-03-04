@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.1)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.2)');
 
     var pollInterval = null;
 
@@ -480,7 +480,7 @@
     });
 
     // Parent-child checkbox logic + sync hidden field + toggle mapping.
-    $(document).on('change', '.rolmar-cat-checkbox', function () {
+    $(document).on('change', '.rolmar-cat-checkbox', function (e) {
         var $this = $(this);
         var isChecked = $this.is(':checked');
         var path = $this.data('path');
@@ -490,16 +490,28 @@
         // Toggle mapping dropdown for this checkbox.
         toggleMappingDropdown(path, isChecked);
 
-        // Find all descendant checkboxes in the child tree list (not including this checkbox).
+        // Find all descendant checkboxes — search within this <li>'s nested <ul> elements.
         var $treeNode = $this.closest('.rolmar-tree-node');
-        var $childList = $treeNode.children('.rolmar-tree-list');
+        var $descendants = $treeNode.find('.rolmar-cat-checkbox').not($this);
 
-        if ($childList.length) {
-            // Check/uncheck all descendant checkboxes in child nodes.
-            $childList.find('.rolmar-cat-checkbox').each(function () {
-                $(this).prop('checked', isChecked);
-                toggleMappingDropdown($(this).data('path'), isChecked);
+        console.log('[Rolmar] Found', $descendants.length, 'descendant checkboxes for:', path);
+
+        if ($descendants.length) {
+            // First pass: set all checked states.
+            $descendants.each(function () {
+                $(this).prop('checked', isChecked).prop('indeterminate', false);
             });
+
+            // Second pass: toggle mapping dropdowns (separate to avoid DOM interference).
+            $descendants.each(function () {
+                try {
+                    toggleMappingDropdown($(this).data('path'), isChecked);
+                } catch (err) {
+                    console.warn('[Rolmar] toggleMappingDropdown error for', $(this).data('path'), err);
+                }
+            });
+
+            console.log('[Rolmar] Set', $descendants.length, 'descendants to', isChecked ? 'CHECKED' : 'UNCHECKED');
         }
 
         // Update parent states (indeterminate / checked).
