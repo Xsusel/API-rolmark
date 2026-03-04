@@ -614,10 +614,11 @@ class Rolmar_Admin {
         }
 
         wp_localize_script( 'rolmar-admin', 'rolmarAdmin', array(
-            'ajaxUrl'       => admin_url( 'admin-ajax.php' ),
-            'nonce'         => wp_create_nonce( 'rolmar_admin_nonce' ),
-            'wcCategories'  => $wc_categories,
-            'i18n'          => array(
+            'ajaxUrl'              => admin_url( 'admin-ajax.php' ),
+            'nonce'                => wp_create_nonce( 'rolmar_admin_nonce' ),
+            'wcCategories'         => $wc_categories,
+            'autoCreateCategories' => get_option( 'rolmar_auto_create_categories', 'yes' ),
+            'i18n'                 => array(
                 'testing'            => __( 'Testowanie...', 'rolmar-integration' ),
                 'success'            => __( 'Połączenie udane!', 'rolmar-integration' ),
                 'error'              => __( 'Błąd połączenia', 'rolmar-integration' ),
