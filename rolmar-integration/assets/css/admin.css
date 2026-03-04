@@ -161,6 +161,12 @@
     color: #0073aa;
 }
 
+.rolmar-cat-count {
+    font-size: 11px;
+    color: #787c82;
+    font-weight: normal;
+}
+
 /* Category mapping — tag picker */
 .rolmar-cat-mapping {
     display: block;
