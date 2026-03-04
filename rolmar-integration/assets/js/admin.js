@@ -4,54 +4,129 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.1.0)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.0)');
 
     var pollInterval = null;
 
-    // --- WooCommerce Category Mapping Helpers ---
+    // --- WooCommerce Category Mapping — Searchable Tag Picker ---
+
+    var wcCats = (rolmarAdmin && rolmarAdmin.wcCategories) || [];
 
     /**
-     * Populate a <select multiple> with WooCommerce categories.
+     * Build the tag-picker widget HTML inside a .rolmar-cat-mapping container.
      */
-    function populateWcCatSelect($select) {
-        if ($select.children('option').length > 0) {
-            return; // Already populated.
-        }
-        var cats = rolmarAdmin.wcCategories || [];
-        if (!cats.length) {
-            $select.append('<option value="" disabled>Brak kategorii w WooCommerce</option>');
-            return;
-        }
-        cats.forEach(function (cat) {
-            $select.append('<option value="' + cat.id + '">' + $('<span>').text(cat.display).html() + '</option>');
+    function initTagPicker($container) {
+        if ($container.find('.rolmar-picker').length) return; // Already initialised.
+
+        var path = $container.data('path');
+        var html = '<div class="rolmar-picker" data-path="' + $('<span>').text(path).html() + '">';
+        html += '<div class="rolmar-picker-tags"></div>';
+        html += '<div class="rolmar-picker-input-wrap">';
+        html += '<input type="text" class="rolmar-picker-search" placeholder="Szukaj kategorii WC..." autocomplete="off" />';
+        html += '</div>';
+        html += '<div class="rolmar-picker-dropdown"></div>';
+        html += '</div>';
+        $container.empty().append(html);
+    }
+
+    /**
+     * Render selected tags inside the picker.
+     */
+    function renderTags($picker, selectedIds) {
+        var $tagsWrap = $picker.find('.rolmar-picker-tags');
+        $tagsWrap.empty();
+
+        selectedIds.forEach(function (id) {
+            var cat = findCatById(id);
+            if (!cat) return;
+            var tag = '<span class="rolmar-picker-tag" data-id="' + id + '">';
+            tag += '<span class="rolmar-picker-tag-text">' + $('<span>').text(cat.display).html() + '</span>';
+            tag += '<span class="rolmar-picker-tag-remove" data-id="' + id + '">&times;</span>';
+            tag += '</span>';
+            $tagsWrap.append(tag);
         });
     }
 
     /**
-     * Show/hide mapping dropdown based on checkbox state.
+     * Show filtered dropdown.
+     */
+    function showDropdown($picker, query) {
+        var $dropdown = $picker.find('.rolmar-picker-dropdown');
+        var selectedIds = getPickerSelectedIds($picker);
+        query = (query || '').toLowerCase();
+
+        var filtered = wcCats.filter(function (cat) {
+            // Don't show already selected.
+            if (selectedIds.indexOf(cat.id) !== -1) return false;
+            if (!query) return true;
+            return cat.display.toLowerCase().indexOf(query) !== -1 ||
+                   cat.name.toLowerCase().indexOf(query) !== -1;
+        });
+
+        if (!filtered.length) {
+            $dropdown.html('<div class="rolmar-picker-empty">' + (query ? 'Brak wyników' : 'Brak kategorii') + '</div>');
+        } else {
+            var html = '';
+            // Limit display to first 15 matches for performance.
+            var shown = filtered.slice(0, 15);
+            shown.forEach(function (cat) {
+                html += '<div class="rolmar-picker-option" data-id="' + cat.id + '">';
+                html += $('<span>').text(cat.display).html();
+                html += '</div>';
+            });
+            if (filtered.length > 15) {
+                html += '<div class="rolmar-picker-more">...i ' + (filtered.length - 15) + ' więcej — wpisz dokładniej</div>';
+            }
+            $dropdown.html(html);
+        }
+
+        $dropdown.addClass('rolmar-picker-dropdown-open');
+    }
+
+    function hideDropdown($picker) {
+        $picker.find('.rolmar-picker-dropdown').removeClass('rolmar-picker-dropdown-open').empty();
+    }
+
+    function findCatById(id) {
+        id = parseInt(id, 10);
+        for (var i = 0; i < wcCats.length; i++) {
+            if (wcCats[i].id === id) return wcCats[i];
+        }
+        return null;
+    }
+
+    function getPickerSelectedIds($picker) {
+        var ids = [];
+        $picker.find('.rolmar-picker-tag').each(function () {
+            ids.push(parseInt($(this).data('id'), 10));
+        });
+        return ids;
+    }
+
+    /**
+     * Show/hide mapping widget based on checkbox state.
      */
     function toggleMappingDropdown(path, checked) {
-        var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+        var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
         if (checked) {
-            var $select = $mapping.find('.rolmar-wc-cat-select');
-            populateWcCatSelect($select);
-            $mapping.show();
+            initTagPicker($container);
+            $container.show();
         } else {
-            $mapping.hide();
+            $container.hide();
         }
     }
 
     /**
-     * Sync category mapping (API path -> WC category IDs) to hidden field.
+     * Sync all category mappings to hidden field.
      */
     function syncCategoryMapping() {
         var mapping = {};
-        $('.rolmar-wc-cat-select').each(function () {
-            var $sel = $(this);
-            var path = $sel.data('path');
-            var vals = $sel.val();
-            if (vals && vals.length > 0) {
-                mapping[path] = vals.map(function (v) { return parseInt(v, 10); });
+        $('.rolmar-picker').each(function () {
+            var $picker = $(this);
+            var path = $picker.data('path');
+            var ids = getPickerSelectedIds($picker);
+            if (ids.length > 0) {
+                mapping[path] = ids;
             }
         });
         $('#rolmar_category_mapping').val(JSON.stringify(mapping));
@@ -63,34 +138,106 @@
     function restoreMappingState() {
         var raw = $('#rolmar_category_mapping').val();
         var mapping = {};
-        try {
-            mapping = JSON.parse(raw) || {};
-        } catch (e) {
-            mapping = {};
-        }
+        try { mapping = JSON.parse(raw) || {}; } catch (e) { mapping = {}; }
 
         $.each(mapping, function (path, wcIds) {
-            var $mapping = $('.rolmar-cat-mapping[data-path="' + path + '"]');
-            if (!$mapping.length) return;
+            var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+            if (!$container.length) return;
 
-            var $select = $mapping.find('.rolmar-wc-cat-select');
-            populateWcCatSelect($select);
+            initTagPicker($container);
+            var $picker = $container.find('.rolmar-picker');
+            renderTags($picker, wcIds);
 
-            // Set selected values.
-            var strIds = wcIds.map(function (id) { return String(id); });
-            $select.val(strIds);
-
-            // Show the mapping dropdown if this category is checked.
             var $checkbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
             if ($checkbox.is(':checked')) {
-                $mapping.show();
+                $container.show();
             }
         });
     }
 
-    // Listen for changes on WC category selects.
-    $(document).on('change', '.rolmar-wc-cat-select', function () {
+    // --- Tag Picker Event Handlers ---
+
+    // Focus search on click anywhere in picker.
+    $(document).on('click', '.rolmar-picker', function (e) {
+        if (!$(e.target).hasClass('rolmar-picker-tag-remove')) {
+            $(this).find('.rolmar-picker-search').focus();
+        }
+    });
+
+    // Search input -> show/filter dropdown.
+    $(document).on('input', '.rolmar-picker-search', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        showDropdown($picker, $(this).val());
+    });
+
+    // Focus -> show dropdown.
+    $(document).on('focus', '.rolmar-picker-search', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        showDropdown($picker, $(this).val());
+    });
+
+    // Click outside -> close dropdown.
+    $(document).on('mousedown', function (e) {
+        if (!$(e.target).closest('.rolmar-picker').length) {
+            $('.rolmar-picker-dropdown').removeClass('rolmar-picker-dropdown-open').empty();
+        }
+    });
+
+    // Select option from dropdown.
+    $(document).on('mousedown', '.rolmar-picker-option', function (e) {
+        e.preventDefault(); // Prevent blur on search input.
+        var $picker = $(this).closest('.rolmar-picker');
+        var id = parseInt($(this).data('id'), 10);
+        var ids = getPickerSelectedIds($picker);
+        ids.push(id);
+        renderTags($picker, ids);
+        var $search = $picker.find('.rolmar-picker-search');
+        $search.val('');
+        showDropdown($picker, '');
         syncCategoryMapping();
+    });
+
+    // Remove tag.
+    $(document).on('click', '.rolmar-picker-tag-remove', function () {
+        var $picker = $(this).closest('.rolmar-picker');
+        $(this).closest('.rolmar-picker-tag').remove();
+        syncCategoryMapping();
+    });
+
+    // Keyboard navigation in dropdown.
+    $(document).on('keydown', '.rolmar-picker-search', function (e) {
+        var $picker = $(this).closest('.rolmar-picker');
+        var $dropdown = $picker.find('.rolmar-picker-dropdown');
+        var $active = $dropdown.find('.rolmar-picker-option.active');
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if ($active.length) {
+                var $next = $active.removeClass('active').next('.rolmar-picker-option');
+                if ($next.length) $next.addClass('active');
+                else $dropdown.find('.rolmar-picker-option').first().addClass('active');
+            } else {
+                $dropdown.find('.rolmar-picker-option').first().addClass('active');
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if ($active.length) {
+                var $prev = $active.removeClass('active').prev('.rolmar-picker-option');
+                if ($prev.length) $prev.addClass('active');
+                else $dropdown.find('.rolmar-picker-option').last().addClass('active');
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if ($active.length) {
+                $active.trigger('mousedown');
+            }
+        } else if (e.key === 'Escape') {
+            hideDropdown($picker);
+        } else if (e.key === 'Backspace' && !$(this).val()) {
+            // Remove last tag on backspace in empty field.
+            $picker.find('.rolmar-picker-tag').last().remove();
+            syncCategoryMapping();
+        }
     });
 
     // Test Connection

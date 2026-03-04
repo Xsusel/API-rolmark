@@ -844,10 +844,8 @@ class Rolmar_Admin {
             $html .= '<input type="checkbox" class="rolmar-cat-checkbox" data-path="' . $escaped_path . '" /> ';
             $html .= $escaped_name;
             $html .= '</label>';
-            // Mapping dropdown container (shown only when checkbox is checked).
-            $html .= '<span class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;">';
-            $html .= ' &rarr; <select class="rolmar-wc-cat-select" data-path="' . $escaped_path . '" multiple="multiple" style="min-width:250px;"></select>';
-            $html .= '</span>';
+            // Mapping container — JS builds the tag-picker widget inside.
+            $html .= '<div class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;"></div>';
 
             if ( $has_children ) {
                 $html .= $this->render_category_tree_html( $children, $current_path );
