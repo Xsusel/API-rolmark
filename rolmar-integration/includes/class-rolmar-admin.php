@@ -765,64 +765,48 @@ class Rolmar_Admin {
             wp_send_json_error( __( 'Nieprawidłowa odpowiedź z API.', 'rolmar-integration' ) );
         }
 
-        // Extract unique category paths and build tree structure.
-        $tree = array();
-        $sample_paths = array(); // For debugging
-        $path_count = 0;
+        // Build tree structure with product counts at each node.
+        // Tree format: $tree[ $name ] = array( 'children' => [...], 'count' => N )
+        $tree   = array();
+        $counts = array(); // path => number of products
 
         foreach ( $products as $product ) {
             if ( empty( $product['categories'] ) || ! is_array( $product['categories'] ) ) {
                 continue;
             }
             foreach ( $product['categories'] as $path ) {
-                // Save first 5 paths for debugging
-                if ( $path_count < 5 ) {
-                    $sample_paths[] = $path;
-                    $path_count++;
+                $parts = array_values( array_filter( array_map( 'trim', explode( '/', $path ) ) ) );
+                if ( empty( $parts ) ) {
+                    continue;
                 }
 
-                $parts = array_map( 'trim', explode( '/', $path ) );
-                $parts = array_filter( $parts );
-
-                // Debug first path
-                if ( $path_count === 1 ) {
-                    Rolmar_Logger::info( 'DEBUG Path: ' . $path, 'api' );
-                    Rolmar_Logger::info( 'DEBUG Parts count: ' . count( $parts ), 'api' );
-                    Rolmar_Logger::info( 'DEBUG Parts: ' . wp_json_encode( $parts ), 'api' );
-                }
-
-                $ref   = &$tree;
+                // Build nested tree.
+                $ref = &$tree;
+                $current_path = '';
                 foreach ( $parts as $part ) {
+                    $current_path = $current_path ? $current_path . '/' . $part : $part;
                     if ( ! isset( $ref[ $part ] ) ) {
                         $ref[ $part ] = array();
                     }
+                    // Count products at each level.
+                    if ( ! isset( $counts[ $current_path ] ) ) {
+                        $counts[ $current_path ] = 0;
+                    }
+                    $counts[ $current_path ]++;
                     $ref = &$ref[ $part ];
                 }
                 unset( $ref );
             }
         }
 
-        // Log sample paths and tree structure for debugging
-        Rolmar_Logger::info( 'Sample category paths from API: ' . wp_json_encode( $sample_paths ), 'api' );
         Rolmar_Logger::info( 'Tree root level count: ' . count( $tree ), 'api' );
-
-        $root_keys = array_keys( $tree );
-        Rolmar_Logger::info( 'First 3 root categories: ' . wp_json_encode( array_slice( $root_keys, 0, 3 ) ), 'api' );
-
-        // Debug: check if first root has children
-        if ( ! empty( $root_keys[0] ) && isset( $tree[ $root_keys[0] ] ) ) {
-            $first_root_children_count = count( $tree[ $root_keys[0] ] );
-            Rolmar_Logger::info( 'First root "' . $root_keys[0] . '" has ' . $first_root_children_count . ' children', 'api' );
-            if ( $first_root_children_count > 0 ) {
-                Rolmar_Logger::info( 'First root children: ' . wp_json_encode( array_slice( array_keys( $tree[ $root_keys[0] ] ), 0, 3 ) ), 'api' );
-            }
-        }
+        Rolmar_Logger::info( 'Total unique category paths: ' . count( $counts ), 'api' );
 
         // Sort tree alphabetically at each level.
         $this->sort_tree_recursive( $tree );
 
-        // Generate HTML.
-        $html = $this->render_category_tree_html( $tree );
+        // Generate HTML with counts.
+        $html = $this->render_category_tree_html( $tree, '', $counts );
 
         // Cache the HTML.
         update_option( 'rolmar_category_tree_html', $html, false );
@@ -928,7 +912,7 @@ class Rolmar_Admin {
         }
     }
 
-    private function render_category_tree_html( $tree, $parent_path = '' ) {
+    private function render_category_tree_html( $tree, $parent_path = '', $counts = array() ) {
         if ( empty( $tree ) ) {
             return '';
         }
@@ -939,6 +923,7 @@ class Rolmar_Admin {
             $escaped_path = esc_attr( $current_path );
             $escaped_name = esc_html( $name );
             $has_children = ! empty( $children );
+            $count        = isset( $counts[ $current_path ] ) ? (int) $counts[ $current_path ] : 0;
 
             $html .= '<li class="rolmar-tree-node">';
             if ( $has_children ) {
@@ -949,12 +934,15 @@ class Rolmar_Admin {
             $html .= '<label>';
             $html .= '<input type="checkbox" class="rolmar-cat-checkbox" data-path="' . $escaped_path . '" /> ';
             $html .= $escaped_name;
+            if ( $count > 0 ) {
+                $html .= ' <span class="rolmar-cat-count">(' . number_format_i18n( $count ) . ')</span>';
+            }
             $html .= '</label>';
             // Mapping container — JS builds the tag-picker widget inside.
             $html .= '<div class="rolmar-cat-mapping" data-path="' . $escaped_path . '" style="display:none;"></div>';
 
             if ( $has_children ) {
-                $html .= $this->render_category_tree_html( $children, $current_path );
+                $html .= $this->render_category_tree_html( $children, $current_path, $counts );
             }
 
             $html .= '</li>';
