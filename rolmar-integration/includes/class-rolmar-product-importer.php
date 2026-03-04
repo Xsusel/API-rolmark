@@ -18,6 +18,7 @@ class Rolmar_Product_Importer {
     private $import_images;
     private $manage_stock;
     private $allowed_categories;
+    private $category_mapping;
     private $attribute_creation_cache = array();
 
     public function __construct() {
@@ -29,6 +30,10 @@ class Rolmar_Product_Importer {
         $this->allowed_categories = get_option( 'rolmar_allowed_categories', array() );
         if ( ! is_array( $this->allowed_categories ) ) {
             $this->allowed_categories = array();
+        }
+        $this->category_mapping = get_option( 'rolmar_category_mapping', array() );
+        if ( ! is_array( $this->category_mapping ) ) {
+            $this->category_mapping = array();
         }
     }
 
@@ -68,6 +73,9 @@ class Rolmar_Product_Importer {
         $has_category_filter = ! empty( $this->allowed_categories );
         if ( $has_category_filter ) {
             Rolmar_Logger::info( 'Category filter active with ' . count( $this->allowed_categories ) . ' allowed paths.', 'import' );
+        }
+        if ( ! empty( $this->category_mapping ) ) {
+            Rolmar_Logger::info( 'Category mapping active with ' . count( $this->category_mapping ) . ' mapped paths.', 'import' );
         }
 
         Rolmar_Logger::info( "Fetched {$total} products from API. Starting import...", 'import' );
@@ -401,80 +409,52 @@ class Rolmar_Product_Importer {
     }
 
     /**
-     * Set product categories from Rolmar category paths.
+     * Set product categories using the saved category mapping.
+     *
+     * Instead of creating categories from API paths, this looks up the mapping
+     * configured in admin settings and assigns existing WooCommerce categories.
      *
      * @param int   $product_id  WooCommerce product ID.
-     * @param array $categories  Array of category path strings like "Hydraulika siłowa>Węże>Podtyp".
+     * @param array $categories  Array of category path strings from API.
      */
-        private function set_product_categories( $product_id, $categories ) {
+    private function set_product_categories( $product_id, $categories ) {
+        if ( empty( $this->category_mapping ) ) {
+            return;
+        }
+
         $term_ids = array();
 
-        foreach ( $categories as $category_path ) {
-            $parts     = array_map( 'trim', explode( '/', $category_path ) );
-            $parent_id = 0;
-            $last_term_id = 0;
+        foreach ( $categories as $product_path ) {
+            $product_path = trim( $product_path );
 
-            foreach ( $parts as $cat_name ) {
-                if ( empty( $cat_name ) ) continue;
+            // Check for exact match first.
+            if ( isset( $this->category_mapping[ $product_path ] ) ) {
+                $term_ids = array_merge( $term_ids, $this->category_mapping[ $product_path ] );
+                continue;
+            }
 
-                // Find or create term with proper parent handling.
-                $term_id = $this->get_or_create_category( $cat_name, $parent_id );
-
-                if ( $term_id ) {
-                    $last_term_id = $term_id;
-                    $parent_id = $term_id; // Next category will be child of this one.
+            // Check if any mapped path is a parent of this product's path.
+            foreach ( $this->category_mapping as $mapped_path => $wc_ids ) {
+                if ( strpos( $product_path, $mapped_path . '/' ) === 0 || $product_path === $mapped_path ) {
+                    $term_ids = array_merge( $term_ids, $wc_ids );
                 }
             }
-
-            if ( $last_term_id ) {
-                $term_ids[] = $last_term_id; // Add only the last (deepest) category in path.
-            }
         }
+
+        $term_ids = array_unique( array_filter( array_map( 'absint', $term_ids ) ) );
 
         if ( ! empty( $term_ids ) ) {
-            wp_set_object_terms( $product_id, array_unique( $term_ids ), 'product_cat' );
+            // Verify that all term IDs actually exist.
+            $valid_ids = array();
+            foreach ( $term_ids as $tid ) {
+                if ( term_exists( $tid, 'product_cat' ) ) {
+                    $valid_ids[] = $tid;
+                }
+            }
+            if ( ! empty( $valid_ids ) ) {
+                wp_set_object_terms( $product_id, $valid_ids, 'product_cat' );
+            }
         }
-    }
-
-    /**
-     * Get or create a category term with proper parent handling.
-     *
-     * This function properly checks for existing categories by name AND parent,
-     * which term_exists() doesn't always do reliably.
-     *
-     * @param string $name       Category name.
-     * @param int    $parent_id  Parent category ID (0 for top-level).
-     * @return int|false         Term ID on success, false on failure.
-     */
-    private function get_or_create_category( $name, $parent_id = 0 ) {
-        global $wpdb;
-
-        // Find existing term by name and parent.
-        $term = $wpdb->get_row( $wpdb->prepare(
-            "SELECT t.term_id, tt.parent
-             FROM {$wpdb->terms} t
-             INNER JOIN {$wpdb->term_taxonomy} tt ON t.term_id = tt.term_id
-             WHERE t.name = %s
-             AND tt.taxonomy = 'product_cat'
-             AND tt.parent = %d
-             LIMIT 1",
-            $name,
-            $parent_id
-        ) );
-
-        if ( $term ) {
-            return intval( $term->term_id );
-        }
-
-        // Term doesn't exist, create it.
-        $result = wp_insert_term( $name, 'product_cat', array( 'parent' => $parent_id ) );
-
-        if ( is_wp_error( $result ) ) {
-            Rolmar_Logger::warning( "Failed to create category '{$name}' (parent: {$parent_id}): " . $result->get_error_message(), 'import' );
-            return false;
-        }
-
-        return isset( $result['term_id'] ) ? intval( $result['term_id'] ) : false;
     }
 
     /**
