@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.0)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.1)');
 
     var pollInterval = null;
 
@@ -458,7 +458,9 @@
     });
 
     // Toggle tree node expand/collapse.
-    $(document).on('click', '.rolmar-tree-toggle', function () {
+    $(document).on('click', '.rolmar-tree-toggle', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
         var $li = $(this).closest('.rolmar-tree-node');
         $li.toggleClass('rolmar-tree-open');
     });
@@ -482,6 +484,8 @@
         var $this = $(this);
         var isChecked = $this.is(':checked');
         var path = $this.data('path');
+
+        console.log('[Rolmar] Checkbox change:', path, isChecked ? 'CHECKED' : 'UNCHECKED');
 
         // Toggle mapping dropdown for this checkbox.
         toggleMappingDropdown(path, isChecked);
