@@ -522,6 +522,7 @@ class Rolmar_Product_Importer {
      */
     private function set_product_specifications( $product, $specifications ) {
         $attributes = $product->get_attributes();
+        $product_id = $product->get_id();
 
         foreach ( $specifications as $spec ) {
             if ( empty( $spec['name'] ) || ! isset( $spec['value'] ) ) {
@@ -536,15 +537,54 @@ class Rolmar_Product_Importer {
                 $attr_value .= ' ' . $unit_name;
             }
 
-            // Use local (non-taxonomy) attributes for specifications.
+            if ( empty( $attr_value ) ) {
+                continue;
+            }
+
+            // Use proper taxonomy attributes (pa_*) for filtering/sorting.
             $attr_slug = sanitize_title( $attr_name );
+            // Limit slug to 28 chars (WooCommerce max for attribute names).
+            if ( strlen( $attr_slug ) > 28 ) {
+                $attr_slug = substr( $attr_slug, 0, 28 );
+            }
+
+            $attribute_id = $this->ensure_product_attribute( $attr_slug, $attr_name );
+            if ( false === $attribute_id ) {
+                continue;
+            }
+
+            $taxonomy = 'pa_' . $attr_slug;
+
+            // Create the term if it doesn't exist.
+            $term = get_term_by( 'name', $attr_value, $taxonomy );
+            if ( ! $term ) {
+                $result = wp_insert_term( $attr_value, $taxonomy );
+                if ( ! is_wp_error( $result ) ) {
+                    $term_id = $result['term_id'];
+                } else {
+                    // Term might already exist with different case.
+                    $term = get_term_by( 'slug', sanitize_title( $attr_value ), $taxonomy );
+                    $term_id = $term ? $term->term_id : 0;
+                }
+            } else {
+                $term_id = $term->term_id;
+            }
+
+            if ( empty( $term_id ) ) {
+                continue;
+            }
+
+            // Assign term to product.
+            wp_set_object_terms( $product_id, array( $term_id ), $taxonomy, true );
+
+            // Set up the WC_Product_Attribute object.
             $attribute = new WC_Product_Attribute();
-            $attribute->set_id( 0 ); // Local attribute.
-            $attribute->set_name( $attr_name );
-            $attribute->set_options( array( $attr_value ) );
+            $attribute->set_id( $attribute_id );
+            $attribute->set_name( $taxonomy );
+            $attribute->set_options( array( $term_id ) );
             $attribute->set_visible( true );
             $attribute->set_variation( false );
-            $attributes[ $attr_slug ] = $attribute;
+            $attributes[ $taxonomy ] = $attribute;
         }
 
         $product->set_attributes( $attributes );
@@ -569,7 +609,6 @@ class Rolmar_Product_Importer {
         $auto_create = get_option( 'rolmar_auto_create_categories', 'yes' ) === 'yes';
 
         // Deduplicate and keep only the deepest (leaf) paths.
-        // If API sends ["A", "A/B", "A/B/C"], only keep "A/B/C".
         $categories = array_map( 'trim', $categories );
         $categories = array_filter( $categories );
         $categories = array_unique( $categories );
@@ -594,13 +633,11 @@ class Rolmar_Product_Importer {
 
             // Try mapping first (if configured).
             if ( ! empty( $this->category_mapping ) ) {
-                // Exact match.
                 if ( isset( $this->category_mapping[ $product_path ] ) ) {
                     $term_ids = array_merge( $term_ids, $this->category_mapping[ $product_path ] );
                     $matched  = true;
                 }
 
-                // Parent path match.
                 if ( ! $matched ) {
                     foreach ( $this->category_mapping as $mapped_path => $wc_ids ) {
                         if ( strpos( $product_path, $mapped_path . '/' ) === 0 || $product_path === $mapped_path ) {
@@ -612,10 +649,13 @@ class Rolmar_Product_Importer {
             }
 
             // Auto-create WooCommerce category hierarchy from API path.
+            // ONLY create categories that match the allowed (selected) categories.
             if ( ! $matched && $auto_create ) {
-                $leaf_term_id = $this->ensure_category_hierarchy( $product_path );
-                if ( $leaf_term_id ) {
-                    $term_ids[] = $leaf_term_id;
+                if ( $this->is_path_allowed( $product_path ) ) {
+                    $leaf_term_id = $this->ensure_category_hierarchy( $product_path );
+                    if ( $leaf_term_id ) {
+                        $term_ids[] = $leaf_term_id;
+                    }
                 }
             }
         }
@@ -633,6 +673,41 @@ class Rolmar_Product_Importer {
                 wp_set_object_terms( $product_id, $valid_ids, 'product_cat' );
             }
         }
+    }
+
+    /**
+     * Check if a category path is allowed by the selected categories filter.
+     *
+     * A path is allowed if:
+     * - No filter is set (all categories allowed)
+     * - The path exactly matches an allowed path
+     * - The path is a child of an allowed path
+     * - An allowed path is a child of this path (parent of selected)
+     *
+     * @param string $path  Category path to check.
+     * @return bool
+     */
+    private function is_path_allowed( $path ) {
+        if ( empty( $this->allowed_categories ) ) {
+            return true; // No filter = all allowed.
+        }
+
+        foreach ( $this->allowed_categories as $allowed ) {
+            // Exact match.
+            if ( $path === $allowed ) {
+                return true;
+            }
+            // Path is a child of an allowed path.
+            if ( strpos( $path, $allowed . '/' ) === 0 ) {
+                return true;
+            }
+            // Allowed path is a child of this path (we're a parent).
+            if ( strpos( $allowed, $path . '/' ) === 0 ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -35,6 +35,7 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_test_download_image', array( $this, 'ajax_test_download_image' ) );
         add_action( 'wp_ajax_rolmar_proxy_photo', array( $this, 'ajax_proxy_photo' ) );
         add_action( 'wp_ajax_rolmar_debug_category_structure', array( $this, 'ajax_debug_category_structure' ) );
+        add_action( 'wp_ajax_rolmar_cleanup_all', array( $this, 'ajax_cleanup_all' ) );
     }
 
     public function add_menu() {
@@ -508,6 +509,18 @@ class Rolmar_Admin {
                     </button>
                 </p>
                 <div id="rolmar-debug-categories-result"></div>
+
+                <hr />
+                <h3 style="color: #d63638;"><?php esc_html_e( 'Czyszczenie danych Rolmar', 'rolmar-integration' ); ?></h3>
+                <p class="description">
+                    <?php esc_html_e( 'Usuwa WSZYSTKIE produkty zaimportowane z Rolmar, ich zdjęcia, kategorie utworzone przez wtyczkę oraz atrybuty. NIE usuwa produktów, kategorii ani zdjęć dodanych ręcznie.', 'rolmar-integration' ); ?>
+                </p>
+                <p>
+                    <button type="button" id="rolmar-cleanup-all" class="button" style="background: #d63638; border-color: #d63638; color: #fff;">
+                        <?php esc_html_e( 'Usuń wszystkie dane Rolmar', 'rolmar-integration' ); ?>
+                    </button>
+                </p>
+                <div id="rolmar-cleanup-result" style="margin-top: 10px;"></div>
 
                 <div id="rolmar-sync-progress" style="<?php echo $sync_in_progress ? '' : 'display:none;'; ?>">
                     <div class="rolmar-progress-bar">
@@ -2461,5 +2474,244 @@ class Rolmar_Admin {
         $url = preg_replace( '/\?&/', '?', $url );
 
         return $url;
+    }
+
+    /**
+     * AJAX handler: cleanup all Rolmar-imported data.
+     *
+     * Removes:
+     * - All products with _rolmar_product = 'yes' meta
+     * - Their attached images (featured + gallery)
+     * - Product categories created by the plugin (with _rolmar_created meta)
+     * - Product attributes created by the plugin (pa_* taxonomies from woocommerce_attribute_taxonomies)
+     * - Related options and transients
+     */
+    public function ajax_cleanup_all() {
+        check_ajax_referer( 'rolmar_admin_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( __( 'Brak uprawnień.', 'rolmar-integration' ) );
+        }
+
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
+
+        $stats = array(
+            'products_deleted'   => 0,
+            'images_deleted'     => 0,
+            'categories_deleted' => 0,
+            'attributes_deleted' => 0,
+        );
+
+        // 1. Find all Rolmar products.
+        $rolmar_products = get_posts( array(
+            'post_type'      => 'product',
+            'posts_per_page' => -1,
+            'post_status'    => 'any',
+            'fields'         => 'ids',
+            'meta_query'     => array(
+                array(
+                    'key'   => '_rolmar_product',
+                    'value' => 'yes',
+                ),
+            ),
+        ) );
+
+        Rolmar_Logger::info( 'Cleanup: found ' . count( $rolmar_products ) . ' Rolmar products to delete.', 'import' );
+
+        foreach ( $rolmar_products as $product_id ) {
+            $product = wc_get_product( $product_id );
+            if ( ! $product ) {
+                wp_delete_post( $product_id, true );
+                $stats['products_deleted']++;
+                continue;
+            }
+
+            // Delete featured image.
+            $thumbnail_id = get_post_thumbnail_id( $product_id );
+            if ( $thumbnail_id ) {
+                // Only delete if the image is not used by other (non-Rolmar) products.
+                $usage_count = $this->count_attachment_usage( $thumbnail_id, $rolmar_products );
+                if ( $usage_count <= 1 ) {
+                    wp_delete_attachment( $thumbnail_id, true );
+                    $stats['images_deleted']++;
+                }
+            }
+
+            // Delete gallery images.
+            $gallery_ids = $product->get_gallery_image_ids();
+            foreach ( $gallery_ids as $gallery_id ) {
+                $usage_count = $this->count_attachment_usage( $gallery_id, $rolmar_products );
+                if ( $usage_count <= 1 ) {
+                    wp_delete_attachment( $gallery_id, true );
+                    $stats['images_deleted']++;
+                }
+            }
+
+            // Delete the product (force delete, bypass trash).
+            $product->delete( true );
+            $stats['products_deleted']++;
+
+            // Free memory periodically.
+            if ( $stats['products_deleted'] % 100 === 0 ) {
+                if ( function_exists( 'wp_cache_flush' ) ) {
+                    wp_cache_flush();
+                }
+            }
+        }
+
+        // 2. Delete Rolmar-created categories.
+        // Categories created by ensure_category_hierarchy have slugs with parent ID suffix.
+        // We'll delete all product_cat terms that have _rolmar_created meta or are empty after product deletion.
+        $all_product_cats = get_terms( array(
+            'taxonomy'   => 'product_cat',
+            'hide_empty' => false,
+            'fields'     => 'ids',
+        ) );
+
+        if ( ! is_wp_error( $all_product_cats ) ) {
+            // Sort by depth (deepest first) so children are deleted before parents.
+            $terms_with_depth = array();
+            foreach ( $all_product_cats as $term_id ) {
+                $ancestors = get_ancestors( $term_id, 'product_cat', 'taxonomy' );
+                $terms_with_depth[] = array(
+                    'id'    => $term_id,
+                    'depth' => count( $ancestors ),
+                );
+            }
+            usort( $terms_with_depth, function ( $a, $b ) {
+                return $b['depth'] - $a['depth']; // Deepest first.
+            } );
+
+            foreach ( $terms_with_depth as $item ) {
+                $term_id = $item['id'];
+                $term    = get_term( $term_id, 'product_cat' );
+                if ( ! $term || is_wp_error( $term ) ) {
+                    continue;
+                }
+
+                // Skip "Uncategorized" (default WooCommerce category).
+                $default_cat_id = get_option( 'default_product_cat', 0 );
+                if ( (int) $term_id === (int) $default_cat_id ) {
+                    continue;
+                }
+
+                // Delete if the category is now empty (all products were Rolmar products).
+                $product_count = $term->count;
+                // Re-count to be sure (cache may be stale).
+                $fresh_count = wp_count_posts( 'product' );
+                $live_products = get_posts( array(
+                    'post_type'      => 'product',
+                    'posts_per_page' => 1,
+                    'post_status'    => 'any',
+                    'fields'         => 'ids',
+                    'tax_query'      => array(
+                        array(
+                            'taxonomy' => 'product_cat',
+                            'field'    => 'term_id',
+                            'terms'    => $term_id,
+                        ),
+                    ),
+                ) );
+
+                if ( empty( $live_products ) ) {
+                    wp_delete_term( $term_id, 'product_cat' );
+                    $stats['categories_deleted']++;
+                }
+            }
+        }
+
+        // 3. Delete Rolmar-created attributes.
+        global $wpdb;
+        $rolmar_attributes = $wpdb->get_results(
+            "SELECT attribute_id, attribute_name FROM {$wpdb->prefix}woocommerce_attribute_taxonomies"
+        );
+
+        foreach ( $rolmar_attributes as $attr ) {
+            $taxonomy = 'pa_' . $attr->attribute_name;
+
+            // Check if any non-deleted products still use this attribute.
+            $using_products = get_posts( array(
+                'post_type'      => 'product',
+                'posts_per_page' => 1,
+                'post_status'    => 'any',
+                'fields'         => 'ids',
+                'tax_query'      => array(
+                    array(
+                        'taxonomy' => $taxonomy,
+                        'operator' => 'EXISTS',
+                    ),
+                ),
+            ) );
+
+            if ( empty( $using_products ) ) {
+                // Delete all terms in this taxonomy.
+                $terms = get_terms( array(
+                    'taxonomy'   => $taxonomy,
+                    'hide_empty' => false,
+                    'fields'     => 'ids',
+                ) );
+                if ( ! is_wp_error( $terms ) ) {
+                    foreach ( $terms as $term_id ) {
+                        wp_delete_term( $term_id, $taxonomy );
+                    }
+                }
+
+                // Delete the attribute itself.
+                $wpdb->delete(
+                    $wpdb->prefix . 'woocommerce_attribute_taxonomies',
+                    array( 'attribute_id' => $attr->attribute_id ),
+                    array( '%d' )
+                );
+                $stats['attributes_deleted']++;
+            }
+        }
+
+        // Clear attribute cache.
+        delete_transient( 'wc_attribute_taxonomies' );
+
+        // 4. Clean up options and transients.
+        delete_option( 'rolmar_last_product_sync' );
+        delete_option( 'rolmar_last_stock_sync' );
+        delete_option( 'rolmar_last_photo_sync' );
+        delete_option( 'rolmar_sync_progress' );
+        delete_option( 'rolmar_category_tree_html' );
+        delete_transient( 'rolmar_sync_in_progress' );
+
+        // Flush rewrite rules.
+        flush_rewrite_rules();
+
+        $message = sprintf(
+            __( 'Czyszczenie zakończone. Usunięto: %1$d produktów, %2$d zdjęć, %3$d kategorii, %4$d atrybutów.', 'rolmar-integration' ),
+            $stats['products_deleted'],
+            $stats['images_deleted'],
+            $stats['categories_deleted'],
+            $stats['attributes_deleted']
+        );
+        Rolmar_Logger::info( 'Cleanup: ' . $message, 'import' );
+
+        wp_send_json_success( array(
+            'message' => $message,
+            'stats'   => $stats,
+        ) );
+    }
+
+    /**
+     * Count how many times an attachment is used across products.
+     *
+     * @param int   $attachment_id  Attachment ID.
+     * @param array $exclude_ids    Product IDs to exclude from count.
+     * @return int
+     */
+    private function count_attachment_usage( $attachment_id, $exclude_ids = array() ) {
+        global $wpdb;
+
+        // Check if used as featured image by non-Rolmar products.
+        $thumbnail_usage = $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = '_thumbnail_id' AND meta_value = %d",
+            $attachment_id
+        ) );
+
+        return (int) $thumbnail_usage;
     }
 }

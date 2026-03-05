@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.3.1)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.5.0)');
 
     var pollInterval = null;
 
@@ -1309,6 +1309,54 @@
         }).fail(function () {
             $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
             $result.html('<div class="notice notice-error"><p>Błąd połączenia</p></div>');
+        });
+    });
+
+    // --- Cleanup all Rolmar data ---
+    $('#rolmar-cleanup-all').on('click', function () {
+        if (!confirm('UWAGA! To usunie WSZYSTKIE produkty zaimportowane z Rolmar, ich zdjęcia, kategorie i atrybuty.\n\nNIE da się tego cofnąć.\n\nCzy na pewno chcesz kontynuować?')) {
+            return;
+        }
+        if (!confirm('Ostatnie potwierdzenie: Czy na PEWNO chcesz usunąć wszystkie dane Rolmar?')) {
+            return;
+        }
+
+        var $btn = $(this);
+        var $result = $('#rolmar-cleanup-result');
+
+        $btn.prop('disabled', true).text('Usuwanie danych...');
+        $result.html('<p><span class="spinner is-active" style="float:none;"></span> Usuwanie produktów, zdjęć, kategorii i atrybutów... To może potrwać kilka minut.</p>');
+
+        $.ajax({
+            url: rolmarAdmin.ajaxUrl,
+            type: 'POST',
+            timeout: 600000, // 10 minutes
+            data: {
+                action: 'rolmar_cleanup_all',
+                nonce: rolmarAdmin.nonce
+            },
+            success: function (response) {
+                $btn.prop('disabled', false).text('Usuń wszystkie dane Rolmar');
+                if (response.success) {
+                    var s = response.data.stats;
+                    var html = '<div class="notice notice-success" style="padding: 10px;">';
+                    html += '<p><strong>' + response.data.message + '</strong></p>';
+                    html += '<ul>';
+                    html += '<li>Produkty: ' + s.products_deleted + '</li>';
+                    html += '<li>Zdjęcia: ' + s.images_deleted + '</li>';
+                    html += '<li>Kategorie: ' + s.categories_deleted + '</li>';
+                    html += '<li>Atrybuty: ' + s.attributes_deleted + '</li>';
+                    html += '</ul></div>';
+                    $result.html(html);
+                } else {
+                    $result.html('<div class="notice notice-error"><p>' + (response.data || 'Błąd') + '</p></div>');
+                }
+            },
+            error: function (jqXHR, textStatus) {
+                $btn.prop('disabled', false).text('Usuń wszystkie dane Rolmar');
+                var msg = textStatus === 'timeout' ? 'Przekroczono czas (10 min). Spróbuj ponownie.' : 'Błąd połączenia.';
+                $result.html('<div class="notice notice-error"><p>' + msg + '</p></div>');
+            }
         });
     });
 
