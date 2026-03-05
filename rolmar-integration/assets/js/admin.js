@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.2.2)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.3.0)');
 
     var pollInterval = null;
 
@@ -480,39 +480,41 @@
     });
 
     // Parent-child checkbox logic + sync hidden field + toggle mapping.
+    // Uses PATH-BASED matching (not DOM traversal) for maximum reliability.
     $(document).on('change', '.rolmar-cat-checkbox', function (e) {
         var $this = $(this);
         var isChecked = $this.is(':checked');
         var path = $this.data('path');
+        var pathPrefix = path + '/';
 
         console.log('[Rolmar] Checkbox change:', path, isChecked ? 'CHECKED' : 'UNCHECKED');
 
+        // Find ALL descendant checkboxes by path prefix matching.
+        // This is more reliable than DOM traversal.
+        var descendantCount = 0;
+        var autoCreate = $('#rolmar_auto_create_categories').val();
+
+        $('.rolmar-cat-checkbox').each(function () {
+            var childPath = $(this).data('path');
+            if (childPath && childPath !== path && childPath.indexOf(pathPrefix) === 0) {
+                $(this).prop('checked', isChecked).prop('indeterminate', false);
+                descendantCount++;
+
+                // Toggle mapping dropdown (skip if auto-create is on for performance).
+                if (autoCreate !== 'yes') {
+                    try {
+                        toggleMappingDropdown(childPath, isChecked);
+                    } catch (err) {
+                        console.warn('[Rolmar] toggleMappingDropdown error for', childPath, err);
+                    }
+                }
+            }
+        });
+
+        console.log('[Rolmar] Set', descendantCount, 'descendants to', isChecked ? 'CHECKED' : 'UNCHECKED', 'for:', path);
+
         // Toggle mapping dropdown for this checkbox.
         toggleMappingDropdown(path, isChecked);
-
-        // Find all descendant checkboxes — search within this <li>'s nested <ul> elements.
-        var $treeNode = $this.closest('.rolmar-tree-node');
-        var $descendants = $treeNode.find('.rolmar-cat-checkbox').not($this);
-
-        console.log('[Rolmar] Found', $descendants.length, 'descendant checkboxes for:', path);
-
-        if ($descendants.length) {
-            // First pass: set all checked states.
-            $descendants.each(function () {
-                $(this).prop('checked', isChecked).prop('indeterminate', false);
-            });
-
-            // Second pass: toggle mapping dropdowns (separate to avoid DOM interference).
-            $descendants.each(function () {
-                try {
-                    toggleMappingDropdown($(this).data('path'), isChecked);
-                } catch (err) {
-                    console.warn('[Rolmar] toggleMappingDropdown error for', $(this).data('path'), err);
-                }
-            });
-
-            console.log('[Rolmar] Set', $descendants.length, 'descendants to', isChecked ? 'CHECKED' : 'UNCHECKED');
-        }
 
         // Update parent states (indeterminate / checked).
         updateParentCheckboxes($this);
@@ -522,19 +524,51 @@
     });
 
     function updateParentCheckboxes($child) {
-        var $parentLi = $child.closest('.rolmar-tree-list').closest('.rolmar-tree-node');
-        if (!$parentLi.length) {
+        var childPath = $child.data('path');
+        if (!childPath || childPath.indexOf('/') === -1) {
+            // Top-level category, no parent.
             return;
         }
 
-        var $parentCheckbox = $parentLi.children('label').find('.rolmar-cat-checkbox');
-        var $childCheckboxes = $parentLi.children('.rolmar-tree-list').find('.rolmar-cat-checkbox');
-        var totalChildren = $childCheckboxes.length;
-        var checkedChildren = $childCheckboxes.filter(':checked').length;
+        // Find parent path by removing last segment.
+        var parts = childPath.split('/');
+        parts.pop();
+        var parentPath = parts.join('/');
 
-        if (checkedChildren === 0) {
+        var $parentCheckbox = $('.rolmar-cat-checkbox[data-path="' + CSS.escape(parentPath) + '"]');
+        if (!$parentCheckbox.length) {
+            // Try without CSS.escape for older browsers.
+            $parentCheckbox = $('.rolmar-cat-checkbox').filter(function () {
+                return $(this).data('path') === parentPath;
+            });
+        }
+        if (!$parentCheckbox.length) {
+            return;
+        }
+
+        // Count children of this parent by path prefix.
+        var parentPrefix = parentPath + '/';
+        var totalDirectChildren = 0;
+        var checkedDirectChildren = 0;
+
+        // Only count DIRECT children (one level deeper).
+        var parentDepth = parts.length;
+        $('.rolmar-cat-checkbox').each(function () {
+            var p = $(this).data('path');
+            if (p && p.indexOf(parentPrefix) === 0) {
+                var childParts = p.split('/');
+                if (childParts.length === parentDepth + 1) {
+                    totalDirectChildren++;
+                    if ($(this).is(':checked')) {
+                        checkedDirectChildren++;
+                    }
+                }
+            }
+        });
+
+        if (checkedDirectChildren === 0) {
             $parentCheckbox.prop('checked', false).prop('indeterminate', false);
-        } else if (checkedChildren === totalChildren) {
+        } else if (checkedDirectChildren === totalDirectChildren) {
             $parentCheckbox.prop('checked', true).prop('indeterminate', false);
         } else {
             $parentCheckbox.prop('checked', false).prop('indeterminate', true);
@@ -547,53 +581,40 @@
     function syncCategorySelection() {
         var allChecked = [];
 
-        // Collect all checked paths.
-        $('.rolmar-cat-checkbox:checked').each(function () {
-            allChecked.push($(this).data('path'));
+        // Collect all checked (and not indeterminate) paths.
+        $('.rolmar-cat-checkbox').each(function () {
+            var $cb = $(this);
+            if ($cb.is(':checked') && !$cb.prop('indeterminate')) {
+                allChecked.push($cb.data('path'));
+            }
         });
 
-        // Optimize: remove child paths if parent is fully checked (all children are checked).
-        // This reduces storage - e.g., checking "TEGER" saves ["TEGER"] instead of 500 child paths.
+        // Optimize: remove child paths if parent is fully checked.
+        // E.g., checking "TEGER" saves ["TEGER"] instead of all child paths.
         var optimized = [];
 
         for (var i = 0; i < allChecked.length; i++) {
             var path = allChecked[i];
-            var shouldInclude = true;
+            var coveredByParent = false;
 
-            // Get checkbox for this path to check if it's indeterminate.
-            var $thisCheckbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
-
-            // If this checkbox is indeterminate (partially checked), don't include it.
-            // Its children will be included individually instead.
-            if ($thisCheckbox.prop('indeterminate')) {
-                shouldInclude = false;
-            } else {
-                // Check if any parent of this path is fully checked (not indeterminate).
-                var parts = path.split('/');
-                for (var j = 1; j < parts.length; j++) {
-                    var parentPath = parts.slice(0, j).join('/');
-
-                    // Find parent checkbox.
-                    var $parentCheckbox = $('.rolmar-cat-checkbox[data-path="' + parentPath + '"]');
-                    if ($parentCheckbox.length && $parentCheckbox.is(':checked')) {
-                        // If parent is checked AND not indeterminate (all children checked),
-                        // then this child path is redundant - the parent path covers it.
-                        if (!$parentCheckbox.prop('indeterminate')) {
-                            shouldInclude = false;
-                            break;
-                        }
-                    }
+            // Check if any ancestor path is also in the checked list.
+            var parts = path.split('/');
+            for (var j = 1; j < parts.length; j++) {
+                var ancestorPath = parts.slice(0, j).join('/');
+                if (allChecked.indexOf(ancestorPath) !== -1) {
+                    coveredByParent = true;
+                    break;
                 }
             }
 
-            if (shouldInclude) {
+            if (!coveredByParent) {
                 optimized.push(path);
             }
         }
 
         var jsonVal = JSON.stringify(optimized);
         $('#rolmar_allowed_categories').val(jsonVal);
-        console.log('[Rolmar] syncCategorySelection —', allChecked.length, 'checked →', optimized.length, 'optimized paths saved:', jsonVal.substring(0, 200));
+        console.log('[Rolmar] syncCategorySelection —', allChecked.length, 'checked →', optimized.length, 'optimized paths saved:', jsonVal.substring(0, 300));
 
         // Update selection count display.
         updateSelectionCount(optimized.length);
@@ -1305,6 +1326,10 @@
         if ($('.rolmar-cat-checkbox').length) {
             syncCategorySelection();
             syncCategoryMapping();
+
+            var savedVal = $('#rolmar_allowed_categories').val();
+            var checkedCount = $('.rolmar-cat-checkbox:checked').length;
+            console.log('[Rolmar] FORM SUBMIT — checked checkboxes:', checkedCount, '— hidden field value:', savedVal);
         }
     });
 
