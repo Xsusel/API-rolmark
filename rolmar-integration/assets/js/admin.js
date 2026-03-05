@@ -4,7 +4,7 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.3.0)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.3.1)');
 
     var pollInterval = null;
 
@@ -517,11 +517,27 @@
         toggleMappingDropdown(path, isChecked);
 
         // Update parent states (indeterminate / checked).
-        updateParentCheckboxes($this);
+        try {
+            updateParentCheckboxes($this);
+        } catch (err) {
+            console.error('[Rolmar] updateParentCheckboxes error:', err);
+        }
 
         syncCategorySelection();
         syncCategoryMapping();
     });
+
+    // Build a lookup map: path → checkbox element (for fast access).
+    function buildCheckboxMap() {
+        var map = {};
+        $('.rolmar-cat-checkbox').each(function () {
+            var p = $(this).data('path');
+            if (p) {
+                map[p] = $(this);
+            }
+        });
+        return map;
+    }
 
     function updateParentCheckboxes($child) {
         var childPath = $child.data('path');
@@ -535,24 +551,25 @@
         parts.pop();
         var parentPath = parts.join('/');
 
-        var $parentCheckbox = $('.rolmar-cat-checkbox[data-path="' + CSS.escape(parentPath) + '"]');
-        if (!$parentCheckbox.length) {
-            // Try without CSS.escape for older browsers.
-            $parentCheckbox = $('.rolmar-cat-checkbox').filter(function () {
-                return $(this).data('path') === parentPath;
-            });
-        }
-        if (!$parentCheckbox.length) {
+        // Find parent checkbox by iterating (safe, no CSS.escape needed).
+        var $parentCheckbox = null;
+        $('.rolmar-cat-checkbox').each(function () {
+            if ($(this).data('path') === parentPath) {
+                $parentCheckbox = $(this);
+                return false; // break
+            }
+        });
+
+        if (!$parentCheckbox || !$parentCheckbox.length) {
             return;
         }
 
-        // Count children of this parent by path prefix.
+        // Count direct children of this parent by path prefix.
         var parentPrefix = parentPath + '/';
         var totalDirectChildren = 0;
         var checkedDirectChildren = 0;
-
-        // Only count DIRECT children (one level deeper).
         var parentDepth = parts.length;
+
         $('.rolmar-cat-checkbox').each(function () {
             var p = $(this).data('path');
             if (p && p.indexOf(parentPrefix) === 0) {

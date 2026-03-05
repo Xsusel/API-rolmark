@@ -38,10 +38,14 @@ class Rolmar_Product_Importer {
     }
 
     /**
-     * Run full product import.
+     * Run full product import (with optional integrated photo download).
      */
     public function run_import() {
         Rolmar_Logger::info( 'Starting product import...', 'import' );
+
+        // Increase limits for large catalogs.
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
 
         // Ensure common attributes exist before import starts.
         $this->ensure_common_attributes();
@@ -64,18 +68,24 @@ class Rolmar_Product_Importer {
             return false;
         }
 
+        // Pre-fetch photo data so images can be downloaded during import.
+        $photo_map = array();
+        if ( $this->import_images ) {
+            $this->update_progress( 'fetching', __( 'Pobieranie listy zdjęć z API...', 'rolmar-integration' ) );
+            $photo_map = $this->build_photo_map();
+            Rolmar_Logger::info( 'Photo map built with ' . count( $photo_map ) . ' SKUs.', 'import' );
+        }
+
         $total   = count( $products );
         $created = 0;
         $updated = 0;
         $errors  = 0;
         $skipped = 0;
+        $photos_ok = 0;
 
         $has_category_filter = ! empty( $this->allowed_categories );
         if ( $has_category_filter ) {
             Rolmar_Logger::info( 'Category filter active with ' . count( $this->allowed_categories ) . ' allowed paths.', 'import' );
-        }
-        if ( ! empty( $this->category_mapping ) ) {
-            Rolmar_Logger::info( 'Category mapping active with ' . count( $this->category_mapping ) . ' mapped paths.', 'import' );
         }
 
         Rolmar_Logger::info( "Fetched {$total} products from API. Starting import...", 'import' );
@@ -86,26 +96,8 @@ class Rolmar_Product_Importer {
             if ( $has_category_filter && ! $this->is_product_allowed( $product_data ) ) {
                 $skipped++;
 
-                // Update progress every batch_size items even for skipped.
                 if ( ( $index + 1 ) % $this->batch_size === 0 || ( $index + 1 ) === $total ) {
-                    $processed = $index + 1;
-                    $this->update_progress(
-                        'importing',
-                        sprintf(
-                            __( 'Importowanie %1$d / %2$d produktów (nowych: %3$d, zaktualizowanych: %4$d, pominiętych: %5$d, błędów: %6$d)', 'rolmar-integration' ),
-                            $processed,
-                            $total,
-                            $created,
-                            $updated,
-                            $skipped,
-                            $errors
-                        ),
-                        $total,
-                        $processed,
-                        $created,
-                        $updated,
-                        $errors
-                    );
+                    $this->update_import_progress( $index + 1, $total, $created, $updated, $skipped, $errors, $photos_ok );
                 }
                 continue;
             }
@@ -118,36 +110,35 @@ class Rolmar_Product_Importer {
                 } elseif ( 'updated' === $result ) {
                     $updated++;
                 }
+
+                // Download photos for this product (if available).
+                if ( $this->import_images && ( 'created' === $result || 'updated' === $result ) ) {
+                    $sku = isset( $product_data['productIndex'] ) ? sanitize_text_field( $product_data['productIndex'] ) : '';
+                    if ( ! empty( $sku ) && isset( $photo_map[ $sku ] ) ) {
+                        $product_id = wc_get_product_id_by_sku( $sku );
+                        if ( $product_id && $this->set_product_photos( $product_id, $sku, $photo_map[ $sku ] ) ) {
+                            $photos_ok++;
+                        }
+                    }
+                }
             } catch ( Exception $e ) {
                 $sku = isset( $product_data['productIndex'] ) ? $product_data['productIndex'] : 'unknown';
                 Rolmar_Logger::error( "Error importing product {$sku}: " . $e->getMessage(), 'import' );
                 $errors++;
             }
 
-            // Update progress every batch_size items.
+            // Update progress and throttle every batch_size items.
             if ( ( $index + 1 ) % $this->batch_size === 0 || ( $index + 1 ) === $total ) {
-                $processed = $index + 1;
-                $this->update_progress(
-                    'importing',
-                    sprintf(
-                        __( 'Importowanie %1$d / %2$d produktów (nowych: %3$d, zaktualizowanych: %4$d, pominiętych: %5$d, błędów: %6$d)', 'rolmar-integration' ),
-                        $processed,
-                        $total,
-                        $created,
-                        $updated,
-                        $skipped,
-                        $errors
-                    ),
-                    $total,
-                    $processed,
-                    $created,
-                    $updated,
-                    $errors
-                );
+                $this->update_import_progress( $index + 1, $total, $created, $updated, $skipped, $errors, $photos_ok );
 
                 // Free memory.
                 if ( function_exists( 'wp_cache_flush' ) ) {
                     wp_cache_flush();
+                }
+
+                // Throttle: sleep between batches to avoid server overload.
+                if ( ( $index + 1 ) < $total ) {
+                    usleep( 500000 ); // 0.5 second pause between batches.
                 }
             }
         }
@@ -156,19 +147,15 @@ class Rolmar_Product_Importer {
         $this->handle_inactive_products();
 
         $message = sprintf(
-            __( 'Import zakończony. Łącznie: %1$d, nowych: %2$d, zaktualizowanych: %3$d, pominiętych: %4$d, błędów: %5$d', 'rolmar-integration' ),
+            __( 'Import zakończony. Łącznie: %1$d, nowych: %2$d, zaktualizowanych: %3$d, pominiętych: %4$d, błędów: %5$d, zdjęć: %6$d', 'rolmar-integration' ),
             $total,
             $created,
             $updated,
             $skipped,
-            $errors
+            $errors,
+            $photos_ok
         );
         Rolmar_Logger::info( $message, 'import' );
-
-        // Remind user to sync photos separately.
-        if ( $this->import_images && ( $created > 0 || $updated > 0 ) ) {
-            Rolmar_Logger::info( 'UWAGA: Zdjęcia produktów NIE są pobierane podczas importu. Kliknij "Synchronizuj zdjęcia" aby pobrać obrazki z API getPhotos.', 'import' );
-        }
 
         $this->update_progress( 'done', $message, $total, $total, $created, $updated, $errors );
 
@@ -176,6 +163,161 @@ class Rolmar_Product_Importer {
         delete_transient( 'rolmar_sync_in_progress' );
 
         return true;
+    }
+
+    /**
+     * Update import progress with a standardized message.
+     */
+    private function update_import_progress( $processed, $total, $created, $updated, $skipped, $errors, $photos_ok ) {
+        $this->update_progress(
+            'importing',
+            sprintf(
+                __( 'Importowanie %1$d / %2$d (nowych: %3$d, zakt.: %4$d, pom.: %5$d, błędów: %6$d, zdjęć: %7$d)', 'rolmar-integration' ),
+                $processed,
+                $total,
+                $created,
+                $updated,
+                $skipped,
+                $errors,
+                $photos_ok
+            ),
+            $total,
+            $processed,
+            $created,
+            $updated,
+            $errors
+        );
+    }
+
+    /**
+     * Build a SKU → photo data map from the getPhotos API.
+     *
+     * @return array  Map of SKU => ['main' => [urls], 'gallery' => [urls]].
+     */
+    private function build_photo_map() {
+        $photos = $this->api->get_photos();
+
+        if ( is_wp_error( $photos ) || ! is_array( $photos ) ) {
+            Rolmar_Logger::warning( 'Could not fetch photos from API. Import will continue without images.', 'import' );
+            return array();
+        }
+
+        $grouped = array();
+        foreach ( $photos as $item ) {
+            $sku = '';
+            if ( isset( $item['Index'] ) ) {
+                $sku = $item['Index'];
+            } elseif ( isset( $item['productIndex'] ) ) {
+                $sku = $item['productIndex'];
+            } elseif ( isset( $item['index'] ) ) {
+                $sku = $item['index'];
+            }
+
+            if ( empty( $sku ) ) {
+                continue;
+            }
+
+            $entry_urls = array();
+            $is_main = ! empty( $item['main'] ) && '1' === (string) $item['main'];
+
+            if ( isset( $item['Photo'] ) && is_array( $item['Photo'] ) ) {
+                $entry_urls = $item['Photo'];
+            } elseif ( isset( $item['Photo'] ) && ! empty( $item['Photo'] ) ) {
+                $entry_urls = array( $item['Photo'] );
+            } elseif ( isset( $item['url'] ) && ! empty( $item['url'] ) ) {
+                $entry_urls = array( $item['url'] );
+            } elseif ( isset( $item['photos'] ) && is_array( $item['photos'] ) ) {
+                $entry_urls = $item['photos'];
+            } elseif ( isset( $item['images'] ) && is_array( $item['images'] ) ) {
+                $entry_urls = $item['images'];
+            } elseif ( isset( $item['photo'] ) ) {
+                $entry_urls = array( $item['photo'] );
+            }
+
+            if ( empty( $entry_urls ) ) {
+                continue;
+            }
+
+            if ( ! isset( $grouped[ $sku ] ) ) {
+                $grouped[ $sku ] = array( 'main' => array(), 'gallery' => array() );
+            }
+
+            foreach ( $entry_urls as $entry_url ) {
+                if ( $is_main && empty( $grouped[ $sku ]['main'] ) ) {
+                    $grouped[ $sku ]['main'][] = $entry_url;
+                } else {
+                    $grouped[ $sku ]['gallery'][] = $entry_url;
+                }
+            }
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Set product photos (featured + gallery) from photo map data.
+     *
+     * @param int    $product_id  WooCommerce product ID.
+     * @param string $sku         Product SKU.
+     * @param array  $photo_data  ['main' => [urls], 'gallery' => [urls]].
+     * @return bool  True if at least one photo was set.
+     */
+    private function set_product_photos( $product_id, $sku, $photo_data ) {
+        $product = wc_get_product( $product_id );
+        if ( ! $product ) {
+            return false;
+        }
+
+        $all_urls = array_merge( $photo_data['main'], $photo_data['gallery'] );
+        if ( empty( $all_urls ) ) {
+            return false;
+        }
+
+        $changed = false;
+        $main_url = ! empty( $photo_data['main'][0] ) ? $photo_data['main'][0] : $all_urls[0];
+
+        // Set featured image if product doesn't have one yet.
+        if ( ! get_post_thumbnail_id( $product_id ) ) {
+            $image_id = $this->upload_image_from_url( $main_url, $sku . '_main' );
+            if ( $image_id ) {
+                $product->set_image_id( $image_id );
+                $changed = true;
+            }
+            // Small delay after image download to not overwhelm the photo server.
+            usleep( 200000 ); // 0.2s
+        }
+
+        // Set gallery images (only if product has no gallery yet).
+        $gallery_urls = array();
+        foreach ( $all_urls as $u ) {
+            if ( $u !== $main_url ) {
+                $gallery_urls[] = $u;
+            }
+        }
+
+        if ( ! empty( $gallery_urls ) ) {
+            $existing_gallery = $product->get_gallery_image_ids();
+            if ( empty( $existing_gallery ) ) {
+                $gallery_ids = array();
+                foreach ( $gallery_urls as $i => $gallery_url ) {
+                    $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_gallery_' . ( $i + 1 ) );
+                    if ( $gallery_id ) {
+                        $gallery_ids[] = $gallery_id;
+                    }
+                    usleep( 200000 ); // 0.2s delay between gallery images.
+                }
+                if ( ! empty( $gallery_ids ) ) {
+                    $product->set_gallery_image_ids( $gallery_ids );
+                    $changed = true;
+                }
+            }
+        }
+
+        if ( $changed ) {
+            $product->save();
+        }
+
+        return $changed;
     }
 
     /**
@@ -423,15 +565,31 @@ class Rolmar_Product_Importer {
      * @param array $categories  Array of category path strings from API (e.g. "URSUS/C-330/Hamulce").
      */
     private function set_product_categories( $product_id, $categories ) {
-        $term_ids = array();
+        $term_ids    = array();
         $auto_create = get_option( 'rolmar_auto_create_categories', 'yes' ) === 'yes';
 
-        foreach ( $categories as $product_path ) {
-            $product_path = trim( $product_path );
-            if ( empty( $product_path ) ) {
-                continue;
-            }
+        // Deduplicate and keep only the deepest (leaf) paths.
+        // If API sends ["A", "A/B", "A/B/C"], only keep "A/B/C".
+        $categories = array_map( 'trim', $categories );
+        $categories = array_filter( $categories );
+        $categories = array_unique( $categories );
 
+        // Remove paths that are prefixes of other paths (keep only leaves).
+        $leaf_paths = array();
+        foreach ( $categories as $path ) {
+            $is_prefix = false;
+            foreach ( $categories as $other ) {
+                if ( $path !== $other && strpos( $other, $path . '/' ) === 0 ) {
+                    $is_prefix = true;
+                    break;
+                }
+            }
+            if ( ! $is_prefix ) {
+                $leaf_paths[] = $path;
+            }
+        }
+
+        foreach ( $leaf_paths as $product_path ) {
             $matched = false;
 
             // Try mapping first (if configured).
@@ -979,31 +1137,37 @@ class Rolmar_Product_Importer {
     public function sync_stock() {
         if ( ! $this->manage_stock ) {
             Rolmar_Logger::info( 'Stock management disabled in settings. Skipping.', 'stock' );
+            $this->update_progress( 'done', __( 'Zarządzanie stanami magazynowymi wyłączone.', 'rolmar-integration' ) );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
 
         Rolmar_Logger::info( 'Starting stock sync...', 'stock' );
+        $this->update_progress( 'fetching', __( 'Pobieranie stanów magazynowych z API...', 'rolmar-integration' ) );
 
         $stock_data = $this->api->get_stock();
 
         if ( is_wp_error( $stock_data ) ) {
             Rolmar_Logger::error( 'Failed to fetch stock: ' . $stock_data->get_error_message(), 'stock' );
+            $this->update_progress( 'error', $stock_data->get_error_message() );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
 
         if ( ! is_array( $stock_data ) ) {
             Rolmar_Logger::error( 'Invalid stock response from API.', 'stock' );
+            $this->update_progress( 'error', __( 'Nieprawidłowa odpowiedź z API.', 'rolmar-integration' ) );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
 
+        $total   = count( $stock_data );
         $updated = 0;
         $errors  = 0;
 
-        foreach ( $stock_data as $item ) {
-            // The stock API response structure may vary - try common field names.
+        $this->update_progress( 'importing', sprintf( __( 'Aktualizacja stanów 0 / %d...', 'rolmar-integration' ), $total ), $total );
+
+        foreach ( $stock_data as $index => $item ) {
             $sku = '';
             $qty = 0;
 
@@ -1045,10 +1209,35 @@ class Rolmar_Product_Importer {
                 Rolmar_Logger::error( "Stock update error for {$sku}: " . $e->getMessage(), 'stock' );
                 $errors++;
             }
+
+            // Update progress every 100 items.
+            if ( ( $index + 1 ) % 100 === 0 || ( $index + 1 ) === $total ) {
+                $this->update_progress(
+                    'importing',
+                    sprintf(
+                        __( 'Aktualizacja stanów %1$d / %2$d (zaktualizowanych: %3$d, błędów: %4$d)', 'rolmar-integration' ),
+                        $index + 1,
+                        $total,
+                        $updated,
+                        $errors
+                    ),
+                    $total,
+                    $index + 1,
+                    0,
+                    $updated,
+                    $errors
+                );
+            }
         }
 
+        $message = sprintf(
+            __( 'Synchronizacja stanów zakończona. Zaktualizowanych: %1$d, Błędów: %2$d', 'rolmar-integration' ),
+            $updated,
+            $errors
+        );
         Rolmar_Logger::info( "Stock sync done. Updated: {$updated}, Errors: {$errors}", 'stock' );
 
+        $this->update_progress( 'done', $message, $total, $total, 0, $updated, $errors );
         update_option( 'rolmar_last_stock_sync', current_time( 'mysql' ) );
         delete_transient( 'rolmar_sync_in_progress' );
     }
@@ -1059,23 +1248,29 @@ class Rolmar_Product_Importer {
     public function sync_photos() {
         if ( ! $this->import_images ) {
             Rolmar_Logger::info( 'Image import disabled in settings. Skipping.', 'import' );
+            $this->update_progress( 'done', __( 'Import obrazków wyłączony w ustawieniach.', 'rolmar-integration' ) );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
 
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
+
         Rolmar_Logger::info( 'Starting photo sync...', 'import' );
-        Rolmar_Logger::info( 'Fetching photo URLs from getPhotos API endpoint...', 'import' );
+        $this->update_progress( 'fetching', __( 'Pobieranie zdjęć z API...', 'rolmar-integration' ) );
 
         $photos = $this->api->get_photos();
 
         if ( is_wp_error( $photos ) ) {
             Rolmar_Logger::error( 'Failed to fetch photos: ' . $photos->get_error_message(), 'import' );
+            $this->update_progress( 'error', $photos->get_error_message() );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
 
         if ( ! is_array( $photos ) ) {
             Rolmar_Logger::error( 'Invalid photos response from API.', 'import' );
+            $this->update_progress( 'error', __( 'Nieprawidłowa odpowiedź z API.', 'rolmar-integration' ) );
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
@@ -1083,13 +1278,10 @@ class Rolmar_Product_Importer {
         $total_photos = count( $photos );
         Rolmar_Logger::info( "Received {$total_photos} photo entries from API. Grouping by product...", 'import' );
 
-        // Group photo entries by SKU/index.
-        // API returns one entry per photo: {"main":"1","index":"SKU","url":"..."}
+        // Group photo entries by SKU/index using build_photo_map logic.
         $grouped = array();
         foreach ( $photos as $item ) {
             $sku = '';
-
-            // Handle various possible response structures for SKU.
             if ( isset( $item['Index'] ) ) {
                 $sku = $item['Index'];
             } elseif ( isset( $item['productIndex'] ) ) {
@@ -1102,7 +1294,6 @@ class Rolmar_Product_Importer {
                 continue;
             }
 
-            // Extract photo URL(s) from this entry.
             $entry_urls = array();
             $is_main = ! empty( $item['main'] ) && '1' === (string) $item['main'];
 
@@ -1125,10 +1316,7 @@ class Rolmar_Product_Importer {
             }
 
             if ( ! isset( $grouped[ $sku ] ) ) {
-                $grouped[ $sku ] = array(
-                    'main'    => array(),
-                    'gallery' => array(),
-                );
+                $grouped[ $sku ] = array( 'main' => array(), 'gallery' => array() );
             }
 
             foreach ( $entry_urls as $entry_url ) {
@@ -1143,99 +1331,63 @@ class Rolmar_Product_Importer {
         $total_products = count( $grouped );
         Rolmar_Logger::info( "Grouped into {$total_products} products from {$total_photos} photo entries.", 'import' );
 
-        // Log sample URLs from first 3 products for diagnostics.
-        $sample_count = 0;
-        foreach ( $grouped as $sku => $photo_data ) {
-            if ( $sample_count >= 3 ) {
-                break;
-            }
-            $sample_urls = array_merge( $photo_data['main'], $photo_data['gallery'] );
-            Rolmar_Logger::info( "Photo URL sample [{$sku}]: " . implode( ' | ', array_slice( $sample_urls, 0, 2 ) ), 'import' );
-            $sample_count++;
-        }
+        $this->update_progress( 'importing', sprintf( __( 'Pobieranie zdjęć 0 / %d produktów...', 'rolmar-integration' ), $total_products ), $total_products );
 
         $updated = 0;
         $skipped = 0;
-        $errors = 0;
+        $errors  = 0;
+        $index   = 0;
 
         foreach ( $grouped as $sku => $photo_data ) {
-            $all_urls = array_merge( $photo_data['main'], $photo_data['gallery'] );
-
-            if ( empty( $all_urls ) ) {
-                $skipped++;
-                continue;
-            }
+            $index++;
 
             $product_id = wc_get_product_id_by_sku( $sku );
             if ( ! $product_id ) {
-                Rolmar_Logger::warning( "Photo sync: Product with SKU '{$sku}' not found in WooCommerce. Skipping.", 'import' );
                 $skipped++;
                 continue;
             }
 
-            $product = wc_get_product( $product_id );
-            if ( ! $product ) {
-                $errors++;
-                continue;
+            if ( $this->set_product_photos( $product_id, $sku, $photo_data ) ) {
+                $updated++;
+            } else {
+                $skipped++;
             }
 
-            // Determine main URL and gallery URLs.
-            // If API marks one as main, use it; otherwise use first URL.
-            $main_url = ! empty( $photo_data['main'][0] ) ? $photo_data['main'][0] : $all_urls[0];
+            // Update progress every 20 products and throttle.
+            if ( $index % 20 === 0 || $index === $total_products ) {
+                $this->update_progress(
+                    'importing',
+                    sprintf(
+                        __( 'Pobieranie zdjęć %1$d / %2$d (pobranych: %3$d, pominiętych: %4$d)', 'rolmar-integration' ),
+                        $index,
+                        $total_products,
+                        $updated,
+                        $skipped
+                    ),
+                    $total_products,
+                    $index,
+                    0,
+                    $updated,
+                    $errors
+                );
 
-            // Gallery = all URLs except the one used as main (avoid duplicates).
-            $gallery_urls = array();
-            foreach ( $all_urls as $u ) {
-                if ( $u !== $main_url ) {
-                    $gallery_urls[] = $u;
+                // Free memory between batches.
+                if ( function_exists( 'wp_cache_flush' ) ) {
+                    wp_cache_flush();
                 }
             }
-
-            Rolmar_Logger::info( "Product {$sku}: 1 main + " . count( $gallery_urls ) . ' gallery photos to process.', 'import' );
-
-            // Set featured image if product doesn't have one yet.
-            if ( ! get_post_thumbnail_id( $product_id ) ) {
-                $image_id = $this->upload_image_from_url( $main_url, $sku . '_main' );
-                if ( $image_id ) {
-                    $product->set_image_id( $image_id );
-                }
-            }
-
-            // Set gallery images from remaining photos (only if product has no gallery yet).
-            if ( ! empty( $gallery_urls ) ) {
-                $existing_gallery = $product->get_gallery_image_ids();
-                if ( empty( $existing_gallery ) ) {
-                    $gallery_ids = array();
-                    foreach ( $gallery_urls as $i => $gallery_url ) {
-                        $gallery_id = $this->upload_image_from_url( $gallery_url, $sku . '_gallery_' . ( $i + 1 ) );
-                        if ( $gallery_id ) {
-                            $gallery_ids[] = $gallery_id;
-                        }
-                    }
-                    if ( ! empty( $gallery_ids ) ) {
-                        $product->set_gallery_image_ids( $gallery_ids );
-                        Rolmar_Logger::info( "Product {$sku}: added " . count( $gallery_ids ) . ' gallery images.', 'import' );
-                    }
-                }
-            }
-
-            $product->save();
-            $updated++;
         }
 
         $message = sprintf(
-            'Photo sync complete. Total entries: %d, Updated: %d, Skipped: %d, Errors: %d',
-            $total_photos,
+            __( 'Synchronizacja zdjęć zakończona. Produktów: %1$d, zaktualizowanych: %2$d, pominiętych: %3$d, błędów: %4$d', 'rolmar-integration' ),
+            $total_products,
             $updated,
             $skipped,
             $errors
         );
         Rolmar_Logger::info( $message, 'import' );
 
-        if ( $updated === 0 ) {
-            Rolmar_Logger::warning( 'No products were updated with photos. Possible reasons: products already have images, or SKUs do not match between API and WooCommerce.', 'import' );
-        }
-
+        $this->update_progress( 'done', $message, $total_products, $total_products, 0, $updated, $errors );
         update_option( 'rolmar_last_photo_sync', current_time( 'mysql' ) );
         delete_transient( 'rolmar_sync_in_progress' );
     }

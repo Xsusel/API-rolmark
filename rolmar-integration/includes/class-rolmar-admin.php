@@ -699,6 +699,15 @@ class Rolmar_Admin {
         }
 
         set_transient( 'rolmar_sync_in_progress', 'stock', HOUR_IN_SECONDS );
+        update_option( 'rolmar_sync_progress', array(
+            'total'     => 0,
+            'processed' => 0,
+            'created'   => 0,
+            'updated'   => 0,
+            'errors'    => 0,
+            'status'    => 'fetching',
+            'message'   => __( 'Pobieranie stanów magazynowych z API...', 'rolmar-integration' ),
+        ) );
 
         wp_schedule_single_event( time(), 'rolmar_run_stock_sync' );
         spawn_cron();
@@ -720,6 +729,15 @@ class Rolmar_Admin {
         }
 
         set_transient( 'rolmar_sync_in_progress', 'photos', HOUR_IN_SECONDS );
+        update_option( 'rolmar_sync_progress', array(
+            'total'     => 0,
+            'processed' => 0,
+            'created'   => 0,
+            'updated'   => 0,
+            'errors'    => 0,
+            'status'    => 'fetching',
+            'message'   => __( 'Pobieranie zdjęć z API...', 'rolmar-integration' ),
+        ) );
 
         wp_schedule_single_event( time(), 'rolmar_run_photo_sync' );
         spawn_cron();
