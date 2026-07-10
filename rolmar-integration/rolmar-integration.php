@@ -3,7 +3,7 @@
  * Plugin Name: Rolmar Integration for WooCommerce
  * Plugin URI: 
  * Description: Integracja WooCommerce z API hurtowni Rolmar - import produktów, synchronizacja stanów magazynowych i zdjęć.
- * Version: 1.5.0
+ * Version: 1.6.0
  * Author: Jakub Wcisło
  * Requires at least: 5.8
  * Requires PHP: 7.4
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'ROLMAR_PLUGIN_VERSION', '1.5.0' );
+define( 'ROLMAR_PLUGIN_VERSION', '1.6.0' );
 define( 'ROLMAR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ROLMAR_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'ROLMAR_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
@@ -50,9 +50,6 @@ final class Rolmar_Integration {
     }
 
     private function init_hooks() {
-        register_activation_hook( __FILE__, array( $this, 'activate' ) );
-        register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
-
         add_action( 'admin_init', array( $this, 'check_woocommerce' ) );
         add_action( 'init', array( $this, 'init' ) );
 
@@ -167,8 +164,22 @@ final class Rolmar_Integration {
                     array( '%s', '%s', '%s', '%s', '%d' )
                 );
 
-                // Clear the cache.
+                // Clear the caches (the transient is legacy; modern WooCommerce
+                // caches attributes in the 'woocommerce-attributes' group).
                 delete_transient( 'wc_attribute_taxonomies' );
+                if ( class_exists( 'WC_Cache_Helper' ) ) {
+                    WC_Cache_Helper::invalidate_cache_group( 'woocommerce-attributes' );
+                }
+
+                // Track plugin-created attributes for selective cleanup.
+                $created = get_option( 'rolmar_created_attributes', array() );
+                if ( ! is_array( $created ) ) {
+                    $created = array();
+                }
+                if ( ! in_array( $slug, $created, true ) ) {
+                    $created[] = $slug;
+                    update_option( 'rolmar_created_attributes', $created, false );
+                }
             }
 
             // Register the taxonomy.
@@ -214,3 +225,19 @@ function rolmar_integration_init() {
     return Rolmar_Integration::instance();
 }
 add_action( 'plugins_loaded', 'rolmar_integration_init' );
+
+/**
+ * Activation/deactivation hooks MUST be registered at file inclusion time.
+ * During plugin (de)activation WordPress includes this file after
+ * plugins_loaded has already fired, so hooks registered inside the
+ * plugins_loaded callback would never run and cron would never be scheduled.
+ */
+function rolmar_integration_activate() {
+    rolmar_integration_init()->activate();
+}
+register_activation_hook( __FILE__, 'rolmar_integration_activate' );
+
+function rolmar_integration_deactivate() {
+    rolmar_integration_init()->deactivate();
+}
+register_deactivation_hook( __FILE__, 'rolmar_integration_deactivate' );

@@ -24,7 +24,9 @@ class Rolmar_Product_Importer {
     public function __construct() {
         $this->api              = new Rolmar_API_Client();
         $this->discount_percent = floatval( get_option( 'rolmar_discount_percent', 0 ) );
-        $this->batch_size       = intval( get_option( 'rolmar_batch_size', 50 ) );
+        // Clamp to >= 1: a saved value of 0 would fatal on the modulo-based
+        // batch checkpoints in run_import().
+        $this->batch_size       = max( 1, intval( get_option( 'rolmar_batch_size', 50 ) ) );
         $this->import_images    = get_option( 'rolmar_import_images', 'yes' ) === 'yes';
         $this->manage_stock     = get_option( 'rolmar_manage_stock', 'yes' ) === 'yes';
         $this->allowed_categories = get_option( 'rolmar_allowed_categories', array() );
@@ -91,7 +93,16 @@ class Rolmar_Product_Importer {
         Rolmar_Logger::info( "Fetched {$total} products from API. Starting import...", 'import' );
         $this->update_progress( 'importing', sprintf( __( 'Importowanie 0 / %d produktów...', 'rolmar-integration' ), $total ), $total );
 
+        // SKUs present in the wholesaler feed — used afterwards to detect
+        // products that were removed from the wholesaler entirely.
+        $api_skus = array();
+
         foreach ( $products as $index => $product_data ) {
+            $feed_sku = isset( $product_data['productIndex'] ) ? sanitize_text_field( $product_data['productIndex'] ) : '';
+            if ( '' !== $feed_sku ) {
+                $api_skus[ $feed_sku ] = true;
+            }
+
             // Category filter check.
             if ( $has_category_filter && ! $this->is_product_allowed( $product_data ) ) {
                 $skipped++;
@@ -109,6 +120,8 @@ class Rolmar_Product_Importer {
                     $created++;
                 } elseif ( 'updated' === $result ) {
                     $updated++;
+                } elseif ( 'skipped' === $result ) {
+                    $skipped++;
                 }
 
                 // Download photos for this product (if available).
@@ -132,9 +145,7 @@ class Rolmar_Product_Importer {
                 $this->update_import_progress( $index + 1, $total, $created, $updated, $skipped, $errors, $photos_ok );
 
                 // Free memory.
-                if ( function_exists( 'wp_cache_flush' ) ) {
-                    wp_cache_flush();
-                }
+                $this->free_memory();
 
                 // Throttle: sleep between batches to avoid server overload.
                 if ( ( $index + 1 ) < $total ) {
@@ -145,6 +156,9 @@ class Rolmar_Product_Importer {
 
         // Handle inactive products.
         $this->handle_inactive_products();
+
+        // Hide products that disappeared from the wholesaler feed entirely.
+        $this->handle_missing_products( $api_skus );
 
         $message = sprintf(
             __( 'Import zakończony. Łącznie: %1$d, nowych: %2$d, zaktualizowanych: %3$d, pominiętych: %4$d, błędów: %5$d, zdjęć: %6$d', 'rolmar-integration' ),
@@ -350,9 +364,33 @@ class Rolmar_Product_Importer {
         // Basic data.
         $product->set_sku( $sku );
         $product->set_name( isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : $sku );
-        $product->set_description( isset( $data['description'] ) ? wp_kses_post( $data['description'] ) : '' );
-        $product->set_status( 'publish' );
-        $product->set_catalog_visibility( 'visible' );
+        // Only touch the description when the API actually sent the field,
+        // otherwise an omitted field would wipe the existing description.
+        if ( isset( $data['description'] ) ) {
+            $product->set_description( wp_kses_post( $data['description'] ) );
+        }
+
+        if ( $is_new ) {
+            $product->set_status( 'publish' );
+            $product->set_catalog_visibility( 'visible' );
+        } else {
+            // The product is back in the wholesaler feed. Republish it only if the
+            // plugin itself hid it earlier; drafts created manually by the admin
+            // must stay untouched. Older plugin versions wrote the
+            // _rolmar_deactivation_date key (possibly empty) when drafting, so
+            // key existence — not value — is the legacy signal.
+            $hidden_by_plugin = 'yes' === $product->get_meta( '_rolmar_deactivated_by_plugin' )
+                || metadata_exists( 'post', $product->get_id(), '_rolmar_deactivation_date' );
+
+            if ( 'publish' !== $product->get_status() && $hidden_by_plugin ) {
+                $product->set_status( 'publish' );
+                $product->set_catalog_visibility( 'visible' );
+                $product->delete_meta_data( '_rolmar_deactivated_by_plugin' );
+                $product->delete_meta_data( '_rolmar_deactivation_date' );
+                $product->delete_meta_data( '_rolmar_missing_since' );
+                Rolmar_Logger::info( "Product {$sku} is back in the feed - republishing.", 'import' );
+            }
+        }
 
         // Price calculation: retailPrice * (1 - discount/100).
         if ( ! empty( $data['retailPrice'] ) ) {
@@ -474,21 +512,15 @@ class Rolmar_Product_Importer {
             return;
         }
 
-        // Use pa_marka taxonomy for brand.
-        $taxonomy = 'pa_marka';
-        if ( ! taxonomy_exists( $taxonomy ) ) {
-            // Create the attribute if it doesn't exist.
-            $attribute_id = $this->ensure_product_attribute( 'marka', __( 'Marka', 'rolmar-integration' ) );
-            if ( false === $attribute_id ) {
-                // If attribute creation failed, store brand as meta data instead.
-                $product->update_meta_data( '_product_brand', $brand_name );
-                return;
-            }
-        }
+        // Use pa_marka taxonomy for brand. ensure_product_attribute() creates
+        // the attribute if needed, registers the taxonomy, and returns the
+        // attribute ID (cached per run, so this is cheap).
+        $taxonomy     = 'pa_marka';
+        $attribute_id = $this->ensure_product_attribute( 'marka', __( 'Marka', 'rolmar-integration' ) );
 
-        // Ensure the taxonomy is registered before creating terms.
-        if ( ! taxonomy_exists( $taxonomy ) ) {
-            Rolmar_Logger::warning( "Taxonomy {$taxonomy} does not exist, cannot set brand '{$brand_name}'", 'import' );
+        if ( false === $attribute_id || ! taxonomy_exists( $taxonomy ) ) {
+            // If attribute creation failed, store brand as meta data instead.
+            Rolmar_Logger::warning( "Attribute {$taxonomy} unavailable, cannot set brand '{$brand_name}'", 'import' );
             $product->update_meta_data( '_product_brand', $brand_name );
             return;
         }
@@ -508,7 +540,7 @@ class Rolmar_Product_Importer {
 
         $attributes = $product->get_attributes();
         $attribute  = new WC_Product_Attribute();
-        $attribute->set_id( wc_attribute_taxonomy_id_by_name( $taxonomy ) );
+        $attribute->set_id( (int) $attribute_id );
         $attribute->set_name( $taxonomy );
         $attribute->set_options( array( (int) $term_id ) );
         $attribute->set_visible( true );
@@ -574,8 +606,13 @@ class Rolmar_Product_Importer {
                 continue;
             }
 
-            // Assign term to product.
-            wp_set_object_terms( $product_id, array( $term_id ), $taxonomy, true );
+            // Assign term to product. New products have no ID yet (0) — for
+            // them WooCommerce assigns the terms itself when the product is
+            // saved with the attribute set below; wp_set_object_terms( 0, ... )
+            // would corrupt term counts by attaching terms to post 0.
+            if ( $product_id ) {
+                wp_set_object_terms( $product_id, array( $term_id ), $taxonomy, true );
+            }
 
             // Set up the WC_Product_Attribute object.
             $attribute = new WC_Product_Attribute();
@@ -782,6 +819,10 @@ class Rolmar_Product_Importer {
 
             $term_id   = (int) $result['term_id'];
             $parent_id = $term_id;
+
+            // Tag plugin-created categories so cleanup can tell them apart
+            // from categories the admin created manually.
+            add_term_meta( $term_id, '_rolmar_created', '1', true );
         }
 
         $cache[ $path ] = $term_id;
@@ -1060,7 +1101,7 @@ class Rolmar_Product_Importer {
             // Attribute exists in DB but taxonomy not registered - register it now.
             $this->ensure_taxonomy_registered( $slug, $label );
             $this->attribute_creation_cache[ $slug ] = $existing;
-            delete_transient( 'wc_attribute_taxonomies' );
+            $this->flush_attribute_cache();
             return $existing;
         }
 
@@ -1082,7 +1123,8 @@ class Rolmar_Product_Importer {
             $attribute_id = $wpdb->insert_id;
             $this->ensure_taxonomy_registered( $slug, $label );
             $this->attribute_creation_cache[ $slug ] = $attribute_id;
-            delete_transient( 'wc_attribute_taxonomies' );
+            $this->flush_attribute_cache();
+            $this->remember_created_attribute( $slug );
             Rolmar_Logger::info( "Created attribute '{$slug}' with ID {$attribute_id}", 'import' );
             return $attribute_id;
         }
@@ -1100,6 +1142,37 @@ class Rolmar_Product_Importer {
         // Cache the failure to prevent repeated attempts.
         $this->attribute_creation_cache[ $slug ] = false;
         return false;
+    }
+
+    /**
+     * Invalidate WooCommerce's attribute caches after a direct DB insert.
+     *
+     * The 'wc_attribute_taxonomies' transient was removed in WooCommerce 3.6;
+     * modern WooCommerce caches wc_get_attribute_taxonomies() in the
+     * 'woocommerce-attributes' cache group. Without invalidating it,
+     * wc_attribute_taxonomy_id_by_name() returns 0 for attributes created
+     * mid-request and products get broken non-taxonomy attributes.
+     */
+    private function flush_attribute_cache() {
+        delete_transient( 'wc_attribute_taxonomies' );
+        if ( class_exists( 'WC_Cache_Helper' ) ) {
+            WC_Cache_Helper::invalidate_cache_group( 'woocommerce-attributes' );
+        }
+    }
+
+    /**
+     * Remember an attribute slug created by this plugin, so cleanup can later
+     * remove only Rolmar-created attributes and leave manual ones alone.
+     */
+    private function remember_created_attribute( $slug ) {
+        $created = get_option( 'rolmar_created_attributes', array() );
+        if ( ! is_array( $created ) ) {
+            $created = array();
+        }
+        if ( ! in_array( $slug, $created, true ) ) {
+            $created[] = $slug;
+            update_option( 'rolmar_created_attributes', $created, false );
+        }
     }
 
     /**
@@ -1160,7 +1233,8 @@ class Rolmar_Product_Importer {
 
                 if ( $inserted ) {
                     Rolmar_Logger::info( "Auto-created attribute '{$slug}' (ID: {$wpdb->insert_id})", 'import' );
-                    delete_transient( 'wc_attribute_taxonomies' );
+                    $this->flush_attribute_cache();
+                    $this->remember_created_attribute( $slug );
                 }
             }
 
@@ -1197,13 +1271,126 @@ class Rolmar_Product_Importer {
             if ( $product && 'draft' !== $product->get_status() ) {
                 $product->set_status( 'draft' );
                 $product->set_catalog_visibility( 'hidden' );
+                // With manage_stock on, WooCommerce derives stock_status from
+                // the quantity on save — zero it or the status flips back.
+                if ( $product->get_manage_stock() ) {
+                    $product->set_stock_quantity( 0 );
+                }
+                $product->set_stock_status( 'outofstock' );
                 $product->update_meta_data( '_rolmar_deactivation_date', sanitize_text_field( $item['deactivationDate'] ?? '' ) );
+                $product->update_meta_data( '_rolmar_deactivated_by_plugin', 'yes' );
                 $product->save();
                 $count++;
             }
         }
 
         Rolmar_Logger::info( "Deactivated {$count} products.", 'import' );
+    }
+
+    /**
+     * Hide products that are no longer present in the wholesaler feed.
+     *
+     * getInactiveProducts only reports products deactivated within the last
+     * 5 days, so a product deleted from the wholesaler would otherwise stay
+     * published in the shop forever. After each full import we compare all
+     * Rolmar-imported products against the SKUs actually returned by the API
+     * and move the missing ones to draft (hidden, out of stock). If a product
+     * later reappears in the feed, import_single_product() republishes it.
+     *
+     * @param array $api_skus  Map of SKU => true for every SKU in the feed.
+     */
+    private function handle_missing_products( $api_skus ) {
+        if ( empty( $api_skus ) ) {
+            // Empty/partial feed — do not mass-hide the whole catalog.
+            Rolmar_Logger::warning( 'Missing-product check skipped: API feed contained no SKUs.', 'import' );
+            return;
+        }
+
+        Rolmar_Logger::info( 'Checking for products removed from the wholesaler feed...', 'import' );
+
+        $rolmar_product_ids = get_posts( array(
+            'post_type'      => 'product',
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'meta_query'     => array(
+                array(
+                    'key'   => '_rolmar_product',
+                    'value' => 'yes',
+                ),
+            ),
+        ) );
+
+        if ( empty( $rolmar_product_ids ) ) {
+            return;
+        }
+
+        // Collect the missing ones first so we can sanity-check the ratio.
+        $missing_ids = array();
+        foreach ( $rolmar_product_ids as $product_id ) {
+            $sku = get_post_meta( $product_id, '_sku', true );
+            if ( '' === (string) $sku || isset( $api_skus[ $sku ] ) ) {
+                continue;
+            }
+            $missing_ids[] = $product_id;
+        }
+
+        // Safety valve: a truncated/partial feed would otherwise mass-hide the
+        // shop. If more than 30% of the catalog (and more than 50 products)
+        // suddenly "disappeared", assume a broken feed and skip this run.
+        // Only when a second consecutive import confirms the removal do we
+        // treat it as a real catalog change and proceed.
+        $missing_count = count( $missing_ids );
+        $total_rolmar  = count( $rolmar_product_ids );
+        if ( $missing_count > 50 && $missing_count > 0.3 * $total_rolmar ) {
+            // Confirm only when the previous deferral is recent (within 48h,
+            // i.e. roughly two sync intervals of the slowest schedule). A stale
+            // flag from an old incident must re-arm instead of confirming.
+            $pending_at = (int) get_option( 'rolmar_mass_removal_pending', 0 );
+            $is_recent  = $pending_at && ( time() - $pending_at ) <= 2 * DAY_IN_SECONDS;
+
+            if ( ! $is_recent ) {
+                update_option( 'rolmar_mass_removal_pending', time(), false );
+                Rolmar_Logger::error(
+                    "Missing-product check deferred: {$missing_count} of {$total_rolmar} products are absent from the feed. " .
+                    'This may be an incomplete API response - no products were hidden. The next import (within 48h) will hide them if they are still missing.',
+                    'import'
+                );
+                return;
+            }
+            Rolmar_Logger::warning(
+                "Mass removal of {$missing_count} products confirmed by a second import within 48h - proceeding.",
+                'import'
+            );
+        }
+        delete_option( 'rolmar_mass_removal_pending' );
+
+        $count = 0;
+        foreach ( $missing_ids as $product_id ) {
+            $sku = get_post_meta( $product_id, '_sku', true );
+
+            $product = wc_get_product( $product_id );
+            if ( ! $product ) {
+                continue;
+            }
+
+            $product->set_status( 'draft' );
+            $product->set_catalog_visibility( 'hidden' );
+            // With manage_stock on, WooCommerce derives stock_status from
+            // the quantity on save — zero it or the status flips back.
+            if ( $product->get_manage_stock() ) {
+                $product->set_stock_quantity( 0 );
+            }
+            $product->set_stock_status( 'outofstock' );
+            $product->update_meta_data( '_rolmar_deactivated_by_plugin', 'yes' );
+            $product->update_meta_data( '_rolmar_missing_since', current_time( 'mysql' ) );
+            $product->save();
+            $count++;
+
+            Rolmar_Logger::info( "Product {$sku} (ID: {$product_id}) removed from wholesaler feed - set to draft.", 'import' );
+        }
+
+        Rolmar_Logger::info( "Hidden {$count} products that are no longer in the wholesaler feed.", 'import' );
     }
 
     /**
@@ -1216,6 +1403,10 @@ class Rolmar_Product_Importer {
             delete_transient( 'rolmar_sync_in_progress' );
             return;
         }
+
+        // Large catalogs (~14k SKUs) exceed default PHP limits, same as run_import().
+        @set_time_limit( 0 );
+        @ini_set( 'memory_limit', '512M' );
 
         Rolmar_Logger::info( 'Starting stock sync...', 'stock' );
         $this->update_progress( 'fetching', __( 'Pobieranie stanów magazynowych z API...', 'rolmar-integration' ) );
@@ -1244,7 +1435,7 @@ class Rolmar_Product_Importer {
 
         foreach ( $stock_data as $index => $item ) {
             $sku = '';
-            $qty = 0;
+            $qty = null;
 
             if ( isset( $item['productIndex'] ) ) {
                 $sku = $item['productIndex'];
@@ -1260,32 +1451,30 @@ class Rolmar_Product_Importer {
                 $qty = intval( $item['qty'] );
             }
 
-            if ( empty( $sku ) ) {
-                continue;
-            }
+            if ( '' !== $sku && null !== $qty ) {
+                $product_id = wc_get_product_id_by_sku( $sku );
+                $product    = $product_id ? wc_get_product( $product_id ) : false;
 
-            $product_id = wc_get_product_id_by_sku( $sku );
-            if ( ! $product_id ) {
-                continue;
-            }
-
-            $product = wc_get_product( $product_id );
-            if ( ! $product ) {
-                continue;
-            }
-
-            try {
-                $product->set_manage_stock( true );
-                $product->set_stock_quantity( $qty );
-                $product->set_stock_status( $qty > 0 ? 'instock' : 'outofstock' );
-                $product->save();
-                $updated++;
-            } catch ( Exception $e ) {
-                Rolmar_Logger::error( "Stock update error for {$sku}: " . $e->getMessage(), 'stock' );
+                if ( $product ) {
+                    try {
+                        $product->set_manage_stock( true );
+                        $product->set_stock_quantity( $qty );
+                        $product->set_stock_status( $qty > 0 ? 'instock' : 'outofstock' );
+                        $product->save();
+                        $updated++;
+                    } catch ( Exception $e ) {
+                        Rolmar_Logger::error( "Stock update error for {$sku}: " . $e->getMessage(), 'stock' );
+                        $errors++;
+                    }
+                }
+            } elseif ( '' !== $sku ) {
+                // Unknown quantity field: skip instead of silently zeroing the stock.
+                Rolmar_Logger::warning( "Stock entry for {$sku} has no recognizable quantity field - skipped.", 'stock' );
                 $errors++;
             }
 
-            // Update progress every 100 items.
+            // Update progress every 100 items (also for skipped entries,
+            // otherwise the progress bar appears frozen).
             if ( ( $index + 1 ) % 100 === 0 || ( $index + 1 ) === $total ) {
                 $this->update_progress(
                     'importing',
@@ -1447,9 +1636,7 @@ class Rolmar_Product_Importer {
                 );
 
                 // Free memory between batches.
-                if ( function_exists( 'wp_cache_flush' ) ) {
-                    wp_cache_flush();
-                }
+                $this->free_memory();
             }
         }
 
@@ -1468,6 +1655,28 @@ class Rolmar_Product_Importer {
     }
 
     /**
+     * Free memory between batches without wiping the persistent object cache.
+     *
+     * wp_cache_flush() on Redis/Memcached installs clears the entire cache —
+     * including the transient-based sync lock, defeating the overlap
+     * protection. Prefer the runtime-only flush (WP 6.1+); after a full
+     * flush fallback, re-arm the lock.
+     */
+    private function free_memory() {
+        if ( function_exists( 'wp_cache_flush_runtime' ) ) {
+            wp_cache_flush_runtime();
+            return;
+        }
+        if ( function_exists( 'wp_cache_flush' ) ) {
+            $lock = get_transient( 'rolmar_sync_in_progress' );
+            wp_cache_flush();
+            if ( $lock ) {
+                set_transient( 'rolmar_sync_in_progress', $lock, HOUR_IN_SECONDS );
+            }
+        }
+    }
+
+    /**
      * Update sync progress option.
      */
     private function update_progress( $status, $message, $total = 0, $processed = 0, $created = 0, $updated = 0, $errors = 0 ) {
@@ -1479,6 +1688,15 @@ class Rolmar_Product_Importer {
             'errors'    => $errors,
             'status'    => $status,
             'message'   => $message,
-        ) );
+        ), false );
+
+        // Refresh the sync lock TTL while the job is still making progress.
+        // A big import can take longer than the initial 1-hour TTL; without
+        // the refresh the lock would expire mid-run and a second sync could
+        // start in parallel.
+        $lock = get_transient( 'rolmar_sync_in_progress' );
+        if ( $lock ) {
+            set_transient( 'rolmar_sync_in_progress', $lock, HOUR_IN_SECONDS );
+        }
     }
 }

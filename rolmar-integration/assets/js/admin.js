@@ -4,9 +4,34 @@
 (function ($) {
     'use strict';
 
-    console.log('[Rolmar] Admin JavaScript załadowany (v1.5.0)');
+    console.log('[Rolmar] Admin JavaScript załadowany (v1.6.0)');
 
     var pollInterval = null;
+
+    /**
+     * Escape a string for safe interpolation into HTML (text or attribute context).
+     * Debug views render strings coming from the wholesaler API — never trust them.
+     */
+    function esc(value) {
+        return String(value === null || value === undefined ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * Escape a value for use inside a double-quoted jQuery attribute selector,
+     * e.g. $('[data-path="' + attrEscape(path) + '"]'). Category paths from the
+     * API may contain quotes/backslashes which would otherwise break the
+     * selector (and silently wipe the saved mapping).
+     */
+    function attrEscape(value) {
+        return String(value === null || value === undefined ? '' : value)
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"');
+    }
 
     // --- WooCommerce Category Mapping — Searchable Tag Picker ---
 
@@ -19,7 +44,7 @@
         if ($container.find('.rolmar-picker').length) return; // Already initialised.
 
         var path = $container.data('path');
-        var html = '<div class="rolmar-picker" data-path="' + $('<span>').text(path).html() + '">';
+        var html = '<div class="rolmar-picker" data-path="' + esc(path) + '">';
         html += '<div class="rolmar-picker-tags"></div>';
         html += '<div class="rolmar-picker-input-wrap">';
         html += '<input type="text" class="rolmar-picker-search" placeholder="Szukaj kategorii WC..." autocomplete="off" />';
@@ -107,7 +132,7 @@
      * Show/hide mapping widget based on checkbox state.
      */
     function toggleMappingDropdown(path, checked) {
-        var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+        var $container = $('.rolmar-cat-mapping[data-path="' + attrEscape(path) + '"]');
         var autoCreate = $('#rolmar_auto_create_categories').val();
 
         // When auto-create is on, never show mapping pickers.
@@ -149,14 +174,14 @@
         try { mapping = JSON.parse(raw) || {}; } catch (e) { mapping = {}; }
 
         $.each(mapping, function (path, wcIds) {
-            var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+            var $container = $('.rolmar-cat-mapping[data-path="' + attrEscape(path) + '"]');
             if (!$container.length) return;
 
             initTagPicker($container);
             var $picker = $container.find('.rolmar-picker');
             renderTags($picker, wcIds);
 
-            var $checkbox = $('.rolmar-cat-checkbox[data-path="' + path + '"]');
+            var $checkbox = $('.rolmar-cat-checkbox[data-path="' + attrEscape(path) + '"]');
             if ($checkbox.is(':checked')) {
                 $container.show();
             }
@@ -280,6 +305,7 @@
 
         var $btn = $(this);
         disableSyncButtons(true);
+        updateProgressBar(0); // Reset stale width from a previous run.
         showProgress(rolmarAdmin.i18n.syncing);
 
         $.post(rolmarAdmin.ajaxUrl, {
@@ -301,6 +327,7 @@
     // Sync Stock
     $('#rolmar-sync-stock').on('click', function () {
         disableSyncButtons(true);
+        updateProgressBar(0);
         showProgress(rolmarAdmin.i18n.syncing);
 
         $.post(rolmarAdmin.ajaxUrl, {
@@ -322,6 +349,7 @@
     // Sync Photos
     $('#rolmar-sync-photos').on('click', function () {
         disableSyncButtons(true);
+        updateProgressBar(0);
         showProgress(rolmarAdmin.i18n.syncing);
 
         $.post(rolmarAdmin.ajaxUrl, {
@@ -770,15 +798,18 @@
 
                     html += '<tr class="' + rowClass + '">';
                     html += '<td style="text-align:center;">' + icon + '</td>';
-                    html += '<td><strong>' + check.name + '</strong></td>';
-                    html += '<td style="max-width:350px; word-break:break-word;">' + check.value + '</td>';
+                    html += '<td><strong>' + esc(check.name) + '</strong></td>';
+                    html += '<td style="max-width:350px; word-break:break-word;">' + esc(check.value) + '</td>';
                     // If hint is very long (URL test details), make it expandable.
-                    var hintHtml = check.hint || '';
-                    if (hintHtml.length > 120) {
-                        var shortHint = hintHtml.substring(0, 100) + '...';
+                    // Truncate the RAW string, then escape — the other way
+                    // around mis-measures length and can cut entities in half.
+                    var rawHint = check.hint || '';
+                    var hintHtml = esc(rawHint);
+                    if (rawHint.length > 120) {
+                        var shortHint = esc(rawHint.substring(0, 100)) + '...';
                         hintHtml = '<span class="rolmar-diag-hint-short">' + shortHint + '</span>';
                         hintHtml += '<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:11px;color:#0073aa;">Pokaz szczegoly</summary>';
-                        hintHtml += '<div style="margin-top:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all;background:#f9f9f9;padding:8px;border:1px solid #e0e0e0;border-radius:3px;">' + (check.hint || '').replace(/ \|\| /g, '\n') + '</div></details>';
+                        hintHtml += '<div style="margin-top:6px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all;background:#f9f9f9;padding:8px;border:1px solid #e0e0e0;border-radius:3px;">' + esc(rawHint.replace(/ \|\| /g, '\n')) + '</div></details>';
                     }
                     html += '<td style="color:#666; font-size:12px; max-width:300px;">' + hintHtml + '</td>';
                     html += '</tr>';
@@ -805,7 +836,7 @@
 
                 $result.html(html);
             } else {
-                $result.html('<div class="notice notice-error"><p>Blad: ' + (response.data.message || 'Nieznany blad') + '</p></div>');
+                $result.html('<div class="notice notice-error"><p>Blad: ' + esc(response.data.message || 'Nieznany blad') + '</p></div>');
             }
             },
             error: function (jqXHR, textStatus, errorThrown) {
@@ -852,40 +883,40 @@
 
                 response.data.results.forEach(function (item) {
                     var statusColor = item.status === 'OK' ? 'green' : (item.status === 'EMPTY' ? 'orange' : 'red');
-                    var statusText = item.status;
+                    var statusText = esc(item.status);
                     if (item.error) {
-                        statusText += '<br><small style="font-weight:normal;">' + item.error + '</small>';
+                        statusText += '<br><small style="font-weight:normal;">' + esc(item.error) + '</small>';
                     }
 
                     html += '<tr>';
-                    html += '<td><code>' + item.index + '</code></td>';
+                    html += '<td><code>' + esc(item.index) + '</code></td>';
                     html += '<td style="font-size: 11px;">';
-                    html += '<strong>' + item.name + '</strong><br>';
-                    html += '<small style="color:#666;">SKU: ' + item.sku + '</small><br>';
+                    html += '<strong>' + esc(item.name) + '</strong><br>';
+                    html += '<small style="color:#666;">SKU: ' + esc(item.sku) + '</small><br>';
                     if (item.alt_photos && item.alt_photos.length > 0) {
                         html += '<small style="color:blue;">⚠️ Ma ' + item.alt_photos.length + ' alternatywnych zdjęć!</small><br>';
                     }
                     if (item.all_fields && item.all_fields.length > 0) {
                         html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:10px;color:#666;">Pokaż wszystkie pola API (' + item.all_fields.length + ')</summary>';
-                        html += '<code style="font-size:9px;">' + item.all_fields.join(', ') + '</code></details>';
+                        html += '<code style="font-size:9px;">' + esc(item.all_fields.join(', ')) + '</code></details>';
                     }
                     html += '</td>';
-                    html += '<td style="font-size: 10px; word-break: break-all; max-width: 350px;">' + (item.original_url || '<em>brak</em>') + '</td>';
+                    html += '<td style="font-size: 10px; word-break: break-all; max-width: 350px;">' + (item.original_url ? esc(item.original_url) : '<em>brak</em>') + '</td>';
                     html += '<td style="font-size: 10px; word-break: break-all; max-width: 350px;">';
                     if (item.original_url && item.original_url !== item.cleaned_url) {
                         html += '<span style="background: #fff3cd; padding: 2px 4px; font-size: 9px;">ZMIENIONY</span><br>';
                     }
-                    html += (item.cleaned_url || '<em>brak</em>');
+                    html += (item.cleaned_url ? esc(item.cleaned_url) : '<em>brak</em>');
                     if (item.alt_photos && item.alt_photos.length > 0) {
                         html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Alternatywne zdjęcia (' + item.alt_photos.length + ')</summary>';
                         html += '<ul style="margin:5px 0;padding-left:15px;font-size:9px;">';
                         item.alt_photos.forEach(function(photo) {
-                            html += '<li style="word-break:break-all;">' + photo + '</li>';
+                            html += '<li style="word-break:break-all;">' + esc(photo) + '</li>';
                         });
                         html += '</ul></details>';
                     }
                     html += '</td>';
-                    html += '<td style="text-align: center;">' + (item.http_code || '-') + '</td>';
+                    html += '<td style="text-align: center;">' + esc(item.http_code || '-') + '</td>';
                     html += '<td style="color: ' + statusColor + '; font-weight: bold; text-align: center;">' + statusText + '</td>';
                     html += '</tr>';
                 });
@@ -898,7 +929,7 @@
                 html += '</p></div>';
                 $result.html(html);
             } else {
-                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + esc(response.data.message || 'Nieznany błąd') + '</p></div>');
             }
         }).fail(function () {
             $btn.prop('disabled', false).text('Testuj obrazki (pierwsze 5 produktów)');
@@ -936,11 +967,11 @@
                 response.data.results.forEach(function (item) {
                     var statusColor = item.first_photo_status.includes('OK') ? 'green' : (item.first_photo_status.includes('BRAK') ? 'orange' : 'red');
                     var wcColor = item.wc_product_id ? 'green' : 'red';
-                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? item.photo_urls[0] : '<em>brak</em>';
+                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? esc(item.photo_urls[0]) : '<em>brak</em>';
 
                     html += '<tr>';
-                    html += '<td><code>' + item.identifier + '</code></td>';
-                    html += '<td style="text-align: center;"><strong>' + item.photo_count + '</strong></td>';
+                    html += '<td><code>' + esc(item.identifier) + '</code></td>';
+                    html += '<td style="text-align: center;"><strong>' + esc(item.photo_count) + '</strong></td>';
                     html += '<td style="font-size: 10px; word-break: break-all; max-width: 400px;">' + firstPhotoUrl;
 
                     // Show all photo URLs in expandable section.
@@ -948,16 +979,16 @@
                         html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Wszystkie zdjęcia (' + item.photo_urls.length + ')</summary>';
                         html += '<ol style="margin:5px 0;padding-left:20px;font-size:9px;">';
                         item.photo_urls.forEach(function(url) {
-                            html += '<li style="word-break:break-all;">' + url + '</li>';
+                            html += '<li style="word-break:break-all;">' + esc(url) + '</li>';
                         });
                         html += '</ol></details>';
                     }
                     html += '</td>';
 
                     html += '<td style="text-align: center; color: ' + statusColor + '; font-weight: bold;">';
-                    html += item.first_photo_http ? item.first_photo_http + '<br>' : '';
-                    html += item.first_photo_status + '</td>';
-                    html += '<td style="color: ' + wcColor + '; font-size: 11px;">' + item.wc_status + '</td>';
+                    html += item.first_photo_http ? esc(item.first_photo_http) + '<br>' : '';
+                    html += esc(item.first_photo_status) + '</td>';
+                    html += '<td style="color: ' + wcColor + '; font-size: 11px;">' + esc(item.wc_status) + '</td>';
                     html += '</tr>';
                 });
 
@@ -975,7 +1006,7 @@
                 html += '</div>';
                 $result.html(html);
             } else {
-                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + esc(response.data.message || 'Nieznany błąd') + '</p></div>');
             }
         }).fail(function () {
             $btn.prop('disabled', false).text('Testuj getPhotos API ⭐');
@@ -1033,14 +1064,14 @@
 
                     var photoStatusColor = item.first_photo_status.includes('OK') ? 'green' : (item.first_photo_status === 'N/A' ? 'gray' : 'red');
                     var wcImageColor = item.has_wc_image.includes('TAK') ? 'green' : 'red';
-                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? item.photo_urls[0] : '<em>brak</em>';
+                    var firstPhotoUrl = (item.photo_urls && item.photo_urls.length > 0) ? esc(item.photo_urls[0]) : '<em>brak</em>';
 
                     html += '<tr>';
-                    html += '<td><strong>' + item.product_id + '</strong></td>';
-                    html += '<td style="font-size: 11px;">' + item.product_name + '</td>';
-                    html += '<td><code>' + item.sku + '</code></td>';
-                    html += '<td style="color: ' + apiColor + '; font-weight: bold;">' + item.api_status + '</td>';
-                    html += '<td style="text-align: center;"><strong>' + item.photo_count + '</strong></td>';
+                    html += '<td><strong>' + esc(item.product_id) + '</strong></td>';
+                    html += '<td style="font-size: 11px;">' + esc(item.product_name) + '</td>';
+                    html += '<td><code>' + esc(item.sku) + '</code></td>';
+                    html += '<td style="color: ' + apiColor + '; font-weight: bold;">' + esc(item.api_status) + '</td>';
+                    html += '<td style="text-align: center;"><strong>' + esc(item.photo_count) + '</strong></td>';
                     html += '<td style="font-size: 10px; word-break: break-all; max-width: 300px;">' + firstPhotoUrl;
 
                     // Show all photo URLs in expandable section.
@@ -1048,16 +1079,16 @@
                         html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:9px;">Wszystkie (' + item.photo_urls.length + ')</summary>';
                         html += '<ol style="margin:5px 0;padding-left:20px;font-size:9px;">';
                         item.photo_urls.forEach(function(url) {
-                            html += '<li style="word-break:break-all;">' + url + '</li>';
+                            html += '<li style="word-break:break-all;">' + esc(url) + '</li>';
                         });
                         html += '</ol></details>';
                     }
                     html += '</td>';
 
                     html += '<td style="text-align: center; color: ' + photoStatusColor + '; font-weight: bold;">';
-                    html += item.first_photo_http ? item.first_photo_http + '<br>' : '';
-                    html += item.first_photo_status + '</td>';
-                    html += '<td style="color: ' + wcImageColor + '; font-weight: bold; text-align: center;">' + item.has_wc_image + '</td>';
+                    html += item.first_photo_http ? esc(item.first_photo_http) + '<br>' : '';
+                    html += esc(item.first_photo_status) + '</td>';
+                    html += '<td style="color: ' + wcImageColor + '; font-weight: bold; text-align: center;">' + esc(item.has_wc_image) + '</td>';
 
                     // RAW API Data column
                     html += '<td style="font-size: 10px;">';
@@ -1065,7 +1096,7 @@
                         // Get the raw data from photo_index (we need to add this to the response)
                         html += '<details style="margin-top:5px;"><summary style="cursor:pointer;font-weight:bold;color:#2271b1;">📋 Pokaż RAW JSON</summary>';
                         html += '<pre style="margin:5px 0;padding:10px;background:#f5f5f5;border:1px solid #ddd;overflow:auto;max-height:300px;font-size:9px;font-family:monospace;">';
-                        html += JSON.stringify(item.raw_api_data || {}, null, 2);
+                        html += esc(JSON.stringify(item.raw_api_data || {}, null, 2));
                         html += '</pre></details>';
                     } else {
                         html += '<em style="color:#999;">Brak w API</em>';
@@ -1098,7 +1129,7 @@
                 html += '</div>';
                 $result.html(html);
             } else {
-                $result.html('<div class="notice notice-error"><p>Błąd: ' + (response.data.message || 'Nieznany błąd') + '</p></div>');
+                $result.html('<div class="notice notice-error"><p>Błąd: ' + esc(response.data.message || 'Nieznany błąd') + '</p></div>');
             }
         }).fail(function () {
             $btn.prop('disabled', false).text('🎯 Testuj TWOJE produkty');
@@ -1148,16 +1179,21 @@
                     html += '<div style="background:#f0f6fc; border:2px solid #2271b1; border-radius:6px; padding:15px; margin:10px 0;">';
                     html += '<h4 style="margin-top:0; color:#2271b1;">Podsumowanie testu:</h4>';
                     html += '<table style="border-collapse:collapse; width:100%;">';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Data/czas:</td><td>' + d.timestamp + '</td></tr>';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">SKU:</td><td><code>' + d.sku + '</code></td></tr>';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">URL z API:</td><td style="word-break:break-all;"><a href="' + d.original_url + '" target="_blank">' + d.original_url + '</a></td></tr>';
-                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">IP serwera:</td><td>' + d.server_ip + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Data/czas:</td><td>' + esc(d.timestamp) + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">SKU:</td><td><code>' + esc(d.sku) + '</code></td></tr>';
+                    // Link only http(s) URLs — esc() does not neutralize a
+                    // javascript: scheme inside an href attribute.
+                    var apiUrlCell = /^https?:\/\//i.test(d.original_url || '')
+                        ? '<a href="' + esc(d.original_url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.original_url) + '</a>'
+                        : esc(d.original_url || '');
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">URL z API:</td><td style="word-break:break-all;">' + apiUrlCell + '</td></tr>';
+                    html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">IP serwera:</td><td>' + esc(d.server_ip) + '</td></tr>';
                     html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Testow:</td><td>' + (d.attempts ? d.attempts.length : 0) + ' (' + okCount + ' OK, ' + failCount + ' BLAD)</td></tr>';
                     if (d.success_combo) {
-                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Dziala:</td><td><strong style="color:#00a32a;">' + d.success_combo + '</strong></td></tr>';
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Dziala:</td><td><strong style="color:#00a32a;">' + esc(d.success_combo) + '</strong></td></tr>';
                     }
                     if (d.api_time_ms) {
-                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Czas API:</td><td>' + d.api_time_ms + ' ms</td></tr>';
+                        html += '<tr><td style="padding:4px 10px 4px 0; font-weight:bold; white-space:nowrap;">Czas API:</td><td>' + esc(d.api_time_ms) + ' ms</td></tr>';
                     }
                     html += '</table>';
                     html += '</div>';
@@ -1178,14 +1214,14 @@
                             else if (a.error) rowStyle = 'background:#f8d7da;';
 
                             html += '<tr style="' + rowStyle + '">';
-                            html += '<td style="font-weight:bold;">' + (a.url_label || '-') + '</td>';
-                            html += '<td>' + (a.hdr_label || '-') + '</td>';
-                            html += '<td style="text-align:center; font-weight:bold;">' + (a.http_code || '-') + '</td>';
-                            html += '<td style="text-align:center;">' + (a.size_kb ? a.size_kb + ' KB' : '-') + '</td>';
-                            html += '<td style="font-size:10px;">' + (a.content_type || '-') + '</td>';
-                            html += '<td style="font-size:10px;">' + (a.cf_cache_status || '-') + '</td>';
-                            html += '<td style="text-align:center;">' + (a.time_ms ? a.time_ms + 'ms' : '-') + '</td>';
-                            html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + a.dimensions + '</small>' : '') + '</td>';
+                            html += '<td style="font-weight:bold;">' + esc(a.url_label || '-') + '</td>';
+                            html += '<td>' + esc(a.hdr_label || '-') + '</td>';
+                            html += '<td style="text-align:center; font-weight:bold;">' + esc(a.http_code || '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.size_kb ? esc(a.size_kb) + ' KB' : '-') + '</td>';
+                            html += '<td style="font-size:10px;">' + esc(a.content_type || '-') + '</td>';
+                            html += '<td style="font-size:10px;">' + esc(a.cf_cache_status || '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.time_ms ? esc(a.time_ms) + 'ms' : '-') + '</td>';
+                            html += '<td style="text-align:center;">' + (a.is_image ? '&#10004;' : '&#10008;') + (a.dimensions ? '<br><small>' + esc(a.dimensions) + '</small>' : '') + '</td>';
 
                             // Download / preview button for successful image responses
                             if (a.is_image && a.url) {
@@ -1195,7 +1231,7 @@
                                 html += '<td style="text-align:center;">-</td>';
                             }
 
-                            html += '<td style="font-size:10px; color:#d63638; max-width:250px; word-break:break-all;">' + (a.error || '') + '</td>';
+                            html += '<td style="font-size:10px; color:#d63638; max-width:250px; word-break:break-all;">' + esc(a.error || '') + '</td>';
                             html += '</tr>';
                         });
                     }
@@ -1207,7 +1243,7 @@
                     html += '<table class="widefat" style="font-size:10px; margin-top:5px;">';
                     if (d.attempts) {
                         d.attempts.forEach(function (a) {
-                            html += '<tr><td style="font-weight:bold; white-space:nowrap;">' + (a.url_label || '') + '</td><td style="word-break:break-all;">' + (a.url || '') + '</td></tr>';
+                            html += '<tr><td style="font-weight:bold; white-space:nowrap;">' + esc(a.url_label || '') + '</td><td style="word-break:break-all;">' + esc(a.url || '') + '</td></tr>';
                         });
                     }
                     html += '</table></details>';
@@ -1215,7 +1251,7 @@
 
                     $result.html(html);
                 } else {
-                    $result.html('<div class="notice notice-error"><p>' + (response.data.message || 'Nieznany blad') + '</p></div>');
+                    $result.html('<div class="notice notice-error"><p>' + esc(response.data.message || 'Nieznany blad') + '</p></div>');
                 }
             },
             error: function (jqXHR, textStatus, errorThrown) {
@@ -1244,7 +1280,7 @@
             $btn.prop('disabled', false).text('Pokaż strukturę kategorii z API');
 
             if (!response.success) {
-                $result.html('<div class="notice notice-error"><p>' + (response.data || 'Błąd') + '</p></div>');
+                $result.html('<div class="notice notice-error"><p>' + esc(response.data || 'Błąd') + '</p></div>');
                 return;
             }
 
@@ -1349,7 +1385,7 @@
                     html += '</ul></div>';
                     $result.html(html);
                 } else {
-                    $result.html('<div class="notice notice-error"><p>' + (response.data || 'Błąd') + '</p></div>');
+                    $result.html('<div class="notice notice-error"><p>' + esc(response.data || 'Błąd') + '</p></div>');
                 }
             },
             error: function (jqXHR, textStatus) {
@@ -1374,7 +1410,7 @@
             // Show mapping pickers for checked categories.
             $('.rolmar-cat-checkbox:checked').each(function () {
                 var path = $(this).data('path');
-                var $container = $('.rolmar-cat-mapping[data-path="' + path + '"]');
+                var $container = $('.rolmar-cat-mapping[data-path="' + attrEscape(path) + '"]');
                 initTagPicker($container);
                 $container.show();
             });

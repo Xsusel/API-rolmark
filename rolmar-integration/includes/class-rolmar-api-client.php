@@ -160,7 +160,14 @@ class Rolmar_API_Client {
 
         $body = wp_json_encode( $body_array );
 
-        Rolmar_Logger::info( "API Request: {$method} -> {$url} | Body: {$body}", 'api' );
+        // Never write the API key to log files. Redact in the array before
+        // encoding — a str_replace on the encoded JSON would miss keys whose
+        // characters json_encode escapes (slashes, quotes, non-ASCII).
+        $log_array = $body_array;
+        if ( isset( $log_array['wsKey'] ) ) {
+            $log_array['wsKey'] = '***';
+        }
+        Rolmar_Logger::info( "API Request: {$method} -> {$url} | Body: " . wp_json_encode( $log_array ), 'api' );
 
         $response = wp_remote_post( $url, array(
             'timeout' => self::TIMEOUT,
