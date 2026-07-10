@@ -36,6 +36,13 @@ class Rolmar_Admin {
         add_action( 'wp_ajax_rolmar_proxy_photo', array( $this, 'ajax_proxy_photo' ) );
         add_action( 'wp_ajax_rolmar_debug_category_structure', array( $this, 'ajax_debug_category_structure' ) );
         add_action( 'wp_ajax_rolmar_cleanup_all', array( $this, 'ajax_cleanup_all' ) );
+
+        // The settings pages are gated on manage_woocommerce, but core
+        // options.php requires manage_options by default — this filter lets
+        // shop managers actually save the form they can see.
+        add_filter( 'option_page_capability_rolmar_settings', function () {
+            return 'manage_woocommerce';
+        } );
     }
 
     public function add_menu() {
@@ -90,6 +97,7 @@ class Rolmar_Admin {
 
         $this->add_field( 'api_key', __( 'Klucz API', 'rolmar-integration' ), 'password', 'rolmar_api_section' );
         $this->add_field( 'api_environment', __( 'Środowisko', 'rolmar-integration' ), 'select', 'rolmar_api_section', array(
+            'default' => 'production',
             'options' => array(
                 'production' => __( 'Produkcja (v1)', 'rolmar-integration' ),
                 'test'       => __( 'Test (v1_test)', 'rolmar-integration' ),
@@ -124,6 +132,7 @@ class Rolmar_Admin {
         );
 
         $this->add_field( 'sync_frequency', __( 'Częstotliwość synchronizacji', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'default' => 'twicedaily',
             'options' => array(
                 'hourly'     => __( 'Co godzinę', 'rolmar-integration' ),
                 'twicedaily' => __( 'Dwa razy dziennie', 'rolmar-integration' ),
@@ -132,6 +141,7 @@ class Rolmar_Admin {
         ) );
 
         $this->add_field( 'batch_size', __( 'Rozmiar paczki', 'rolmar-integration' ), 'number', 'rolmar_sync_section', array(
+            'default'     => 50,
             'min'         => 10,
             'max'         => 200,
             'step'        => 10,
@@ -139,6 +149,7 @@ class Rolmar_Admin {
         ) );
 
         $this->add_field( 'import_images', __( 'Importuj zdjęcia', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'default' => 'yes',
             'options' => array(
                 'yes' => __( 'Tak', 'rolmar-integration' ),
                 'no'  => __( 'Nie', 'rolmar-integration' ),
@@ -146,6 +157,7 @@ class Rolmar_Admin {
         ) );
 
         $this->add_field( 'manage_stock', __( 'Zarządzaj stanami magazynowymi', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'default' => 'yes',
             'options' => array(
                 'yes' => __( 'Tak', 'rolmar-integration' ),
                 'no'  => __( 'Nie', 'rolmar-integration' ),
@@ -153,6 +165,7 @@ class Rolmar_Admin {
         ) );
 
         $this->add_field( 'default_language', __( 'Język API', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'default' => 'pl',
             'options' => array(
                 'pl' => 'Polski',
                 'en' => 'English',
@@ -160,6 +173,7 @@ class Rolmar_Admin {
         ) );
 
         $this->add_field( 'auto_create_categories', __( 'Auto-tworzenie kategorii', 'rolmar-integration' ), 'select', 'rolmar_sync_section', array(
+            'default' => 'yes',
             'options' => array(
                 'yes' => __( 'Tak — twórz hierarchię kategorii z API automatycznie', 'rolmar-integration' ),
                 'no'  => __( 'Nie — używaj tylko ręcznego mapowania', 'rolmar-integration' ),
@@ -253,7 +267,7 @@ class Rolmar_Admin {
     }
 
     public function render_field_number( $args ) {
-        $value = get_option( $args['id'], 0 );
+        $value = get_option( $args['id'], isset( $args['default'] ) ? $args['default'] : 0 );
         $min   = isset( $args['min'] ) ? $args['min'] : 0;
         $max   = isset( $args['max'] ) ? $args['max'] : 999999;
         $step  = isset( $args['step'] ) ? $args['step'] : 1;
@@ -270,7 +284,7 @@ class Rolmar_Admin {
     }
 
     public function render_field_select( $args ) {
-        $value   = get_option( $args['id'], '' );
+        $value   = get_option( $args['id'], isset( $args['default'] ) ? $args['default'] : '' );
         $options = isset( $args['options'] ) ? $args['options'] : array();
         printf( '<select id="%s" name="%s">', esc_attr( $args['id'] ), esc_attr( $args['id'] ) );
         foreach ( $options as $key => $label ) {
@@ -291,6 +305,21 @@ class Rolmar_Admin {
         }
     }
 
+    /**
+     * Sanitize a category path from the API without altering it.
+     *
+     * sanitize_text_field() collapses internal whitespace and strip_tags()
+     * discards everything after an unmatched '<' (e.g. "Przewody <10mm") —
+     * both would break the exact-match comparison against raw feed paths.
+     * Paths are stored verbatim (minus invalid UTF-8 and control characters);
+     * every output point escapes them (esc_attr/esc_html in PHP, esc() in JS).
+     */
+    private function sanitize_category_path( $path ) {
+        $path = wp_check_invalid_utf8( (string) $path );
+        $path = preg_replace( '/[\x00-\x1F\x7F]/', '', $path );
+        return trim( $path );
+    }
+
     public function sanitize_allowed_categories( $value ) {
         if ( empty( $value ) ) {
             return array();
@@ -301,7 +330,9 @@ class Rolmar_Admin {
         if ( ! is_array( $value ) ) {
             return array();
         }
-        return array_map( 'sanitize_text_field', array_values( array_unique( $value ) ) );
+        $value = array_map( array( $this, 'sanitize_category_path' ), $value );
+        $value = array_filter( $value, 'strlen' );
+        return array_values( array_unique( $value ) );
     }
 
     public function sanitize_category_mapping( $value ) {
@@ -317,7 +348,7 @@ class Rolmar_Admin {
         // Sanitize: { "api/path": [wc_term_id, ...], ... }
         $clean = array();
         foreach ( $value as $api_path => $wc_ids ) {
-            $api_path = sanitize_text_field( $api_path );
+            $api_path = $this->sanitize_category_path( $api_path );
             if ( empty( $api_path ) ) {
                 continue;
             }
@@ -460,6 +491,8 @@ class Rolmar_Admin {
         $last_stock_sync   = get_option( 'rolmar_last_stock_sync', '' );
         $last_photo_sync   = get_option( 'rolmar_last_photo_sync', '' );
         $sync_in_progress  = get_transient( 'rolmar_sync_in_progress' );
+        $next_product_sync = wp_next_scheduled( 'rolmar_scheduled_product_sync' );
+        $next_stock_sync   = wp_next_scheduled( 'rolmar_scheduled_stock_sync' );
         ?>
         <div class="wrap rolmar-admin">
             <h1><?php esc_html_e( 'Synchronizacja Rolmar', 'rolmar-integration' ); ?></h1>
@@ -479,6 +512,14 @@ class Rolmar_Admin {
                         <tr>
                             <td><strong><?php esc_html_e( 'Ostatnia synchronizacja zdjęć', 'rolmar-integration' ); ?></strong></td>
                             <td id="rolmar-last-photo-sync"><?php echo $last_photo_sync ? esc_html( $last_photo_sync ) : esc_html__( 'Nigdy', 'rolmar-integration' ); ?></td>
+                        </tr>
+                        <tr>
+                            <td><strong><?php esc_html_e( 'Następny automatyczny import produktów', 'rolmar-integration' ); ?></strong></td>
+                            <td><?php echo $next_product_sync ? esc_html( wp_date( 'Y-m-d H:i:s', $next_product_sync ) ) : esc_html__( 'Nie zaplanowano!', 'rolmar-integration' ); ?></td>
+                        </tr>
+                        <tr>
+                            <td><strong><?php esc_html_e( 'Następna automatyczna synchronizacja stanów', 'rolmar-integration' ); ?></strong></td>
+                            <td><?php echo $next_stock_sync ? esc_html( wp_date( 'Y-m-d H:i:s', $next_stock_sync ) ) : esc_html__( 'Nie zaplanowano!', 'rolmar-integration' ); ?></td>
                         </tr>
                     </tbody>
                 </table>
@@ -540,8 +581,14 @@ class Rolmar_Admin {
             return;
         }
 
-        $context = isset( $_GET['log_context'] ) ? sanitize_text_field( $_GET['log_context'] ) : 'import';
-        $logs    = Rolmar_Logger::get_recent_logs( $context, 200 );
+        $contexts = array( 'import', 'stock', 'api', 'cron', 'general' );
+        $context  = isset( $_GET['log_context'] ) ? sanitize_text_field( $_GET['log_context'] ) : 'import';
+        // Whitelist: the context becomes part of a file path, so never accept
+        // arbitrary values (e.g. "../../wp-config.php").
+        if ( ! in_array( $context, $contexts, true ) ) {
+            $context = 'import';
+        }
+        $logs = Rolmar_Logger::get_recent_logs( $context, 200 );
         ?>
         <div class="wrap rolmar-admin">
             <h1><?php esc_html_e( 'Logi Rolmar', 'rolmar-integration' ); ?></h1>
@@ -551,7 +598,6 @@ class Rolmar_Admin {
                 <label for="log_context"><?php esc_html_e( 'Kontekst:', 'rolmar-integration' ); ?></label>
                 <select name="log_context" id="log_context" onchange="this.form.submit()">
                     <?php
-                    $contexts = array( 'import', 'stock', 'api', 'cron', 'general' );
                     foreach ( $contexts as $ctx ) {
                         printf(
                             '<option value="%s"%s>%s</option>',
@@ -689,7 +735,7 @@ class Rolmar_Admin {
             'errors'    => 0,
             'status'    => 'fetching',
             'message'   => __( 'Pobieranie produktów z API...', 'rolmar-integration' ),
-        ) );
+        ), false );
 
         // Schedule immediate processing.
         wp_schedule_single_event( time(), 'rolmar_run_product_import' );
@@ -720,7 +766,7 @@ class Rolmar_Admin {
             'errors'    => 0,
             'status'    => 'fetching',
             'message'   => __( 'Pobieranie stanów magazynowych z API...', 'rolmar-integration' ),
-        ) );
+        ), false );
 
         wp_schedule_single_event( time(), 'rolmar_run_stock_sync' );
         spawn_cron();
@@ -750,7 +796,7 @@ class Rolmar_Admin {
             'errors'    => 0,
             'status'    => 'fetching',
             'message'   => __( 'Pobieranie zdjęć z API...', 'rolmar-integration' ),
-        ) );
+        ), false );
 
         wp_schedule_single_event( time(), 'rolmar_run_photo_sync' );
         spawn_cron();
@@ -806,6 +852,9 @@ class Rolmar_Admin {
             if ( empty( $product['categories'] ) || ! is_array( $product['categories'] ) ) {
                 continue;
             }
+            // Count each product at most once per node — a product with several
+            // paths under the same ancestor must not inflate that ancestor.
+            $counted_for_product = array();
             foreach ( $product['categories'] as $path ) {
                 $parts = array_values( array_filter( array_map( 'trim', explode( '/', $path ) ) ) );
                 if ( empty( $parts ) ) {
@@ -820,11 +869,11 @@ class Rolmar_Admin {
                     if ( ! isset( $ref[ $part ] ) ) {
                         $ref[ $part ] = array();
                     }
-                    // Count products at each level.
-                    if ( ! isset( $counts[ $current_path ] ) ) {
-                        $counts[ $current_path ] = 0;
+                    // Count products at each level (once per product).
+                    if ( ! isset( $counted_for_product[ $current_path ] ) ) {
+                        $counted_for_product[ $current_path ] = true;
+                        $counts[ $current_path ] = isset( $counts[ $current_path ] ) ? $counts[ $current_path ] + 1 : 1;
                     }
-                    $counts[ $current_path ]++;
                     $ref = &$ref[ $part ];
                 }
                 unset( $ref );
@@ -1643,7 +1692,14 @@ class Rolmar_Admin {
         }
 
         $url = isset( $_GET['url'] ) ? esc_url_raw( $_GET['url'] ) : '';
-        if ( empty( $url ) || strpos( $url, 'photo2.rol-mar.com.pl' ) === false ) {
+
+        // Strict host check — a substring test could be bypassed with URLs like
+        // https://evil.example/?x=photo2.rol-mar.com.pl and used to exfiltrate
+        // the wsKey header to an arbitrary server (SSRF).
+        $parsed = wp_parse_url( $url );
+        $scheme = isset( $parsed['scheme'] ) ? strtolower( $parsed['scheme'] ) : '';
+        $host   = isset( $parsed['host'] ) ? strtolower( $parsed['host'] ) : '';
+        if ( empty( $url ) || 'photo2.rol-mar.com.pl' !== $host || ! in_array( $scheme, array( 'http', 'https' ), true ) || ! empty( $parsed['port'] ) || ! empty( $parsed['user'] ) ) {
             wp_die( 'Nieprawidlowy URL.' );
         }
 
@@ -2425,21 +2481,28 @@ class Rolmar_Admin {
 
         // 19. WP Cron status.
         $cron_disabled = defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON;
-        $next_product_sync = wp_next_scheduled( 'rolmar_cron_products' );
-        $next_stock_sync   = wp_next_scheduled( 'rolmar_cron_stock' );
+        $next_product_sync = wp_next_scheduled( 'rolmar_scheduled_product_sync' );
+        $next_stock_sync   = wp_next_scheduled( 'rolmar_scheduled_stock_sync' );
 
-        $cron_detail = 'WP_CRON: ' . ( $cron_disabled ? 'WYLACZONY' : 'aktywny' );
-        if ( $next_product_sync ) {
-            $cron_detail .= ' | Nast. produkty: ' . date_i18n( 'Y-m-d H:i:s', $next_product_sync );
+        $cron_detail  = 'WP_CRON: ' . ( $cron_disabled ? 'WYLACZONY' : 'aktywny' );
+        $cron_detail .= ' | Nast. produkty: ' . ( $next_product_sync ? wp_date( 'Y-m-d H:i:s', $next_product_sync ) : 'NIE ZAPLANOWANE' );
+        $cron_detail .= ' | Nast. stany: ' . ( $next_stock_sync ? wp_date( 'Y-m-d H:i:s', $next_stock_sync ) : 'NIE ZAPLANOWANE' );
+
+        $cron_status = 'ok';
+        $cron_hint   = '';
+        if ( $cron_disabled ) {
+            $cron_status = 'warning';
+            $cron_hint   = 'DISABLE_WP_CRON jest wlaczony. Automatyczna synchronizacja nie bedzie dzialac bez zewnetrznego crona.';
         }
-        if ( $next_stock_sync ) {
-            $cron_detail .= ' | Nast. stany: ' . date_i18n( 'Y-m-d H:i:s', $next_stock_sync );
+        if ( ! $next_product_sync || ! $next_stock_sync ) {
+            $cron_status = 'error';
+            $cron_hint  .= ' Brak zaplanowanych zadan — odswiez strone (harmonogram naprawia sie automatycznie) lub deaktywuj i aktywuj wtyczke ponownie.';
         }
         $checks[] = array(
             'name'   => 'WP Cron (auto-sync)',
-            'status' => $cron_disabled ? 'warning' : 'ok',
+            'status' => $cron_status,
             'value'  => $cron_detail,
-            'hint'   => $cron_disabled ? 'DISABLE_WP_CRON jest wlaczony. Automatyczna synchronizacja nie bedzie dzialac bez zewnetrznego crona.' : '',
+            'hint'   => trim( $cron_hint ),
         );
 
         // 20. Sync lock check.
@@ -2493,6 +2556,13 @@ class Rolmar_Admin {
             wp_send_json_error( __( 'Brak uprawnień.', 'rolmar-integration' ) );
         }
 
+        // Never run cleanup while a sync is writing products.
+        if ( get_transient( 'rolmar_sync_in_progress' ) ) {
+            wp_send_json_error( __( 'Synchronizacja jest w toku. Poczekaj na jej zakończenie przed czyszczeniem danych.', 'rolmar-integration' ) );
+        }
+        // Hold the lock ourselves so no sync starts mid-cleanup.
+        set_transient( 'rolmar_sync_in_progress', 'cleanup', HOUR_IN_SECONDS );
+
         @set_time_limit( 0 );
         @ini_set( 'memory_limit', '512M' );
 
@@ -2519,6 +2589,30 @@ class Rolmar_Admin {
 
         Rolmar_Logger::info( 'Cleanup: found ' . count( $rolmar_products ) . ' Rolmar products to delete.', 'import' );
 
+        // Collect categories and pa_* attributes actually attached to Rolmar
+        // products BEFORE deleting them. Installations upgraded from pre-1.6
+        // versions have no _rolmar_created / rolmar_created_attributes markers,
+        // so this is the fallback signal for the cleanup scoping below.
+        $rolmar_term_ids   = array();
+        $rolmar_attr_slugs = array();
+
+        foreach ( $rolmar_products as $product_id ) {
+            $term_ids = wp_get_object_terms( $product_id, 'product_cat', array( 'fields' => 'ids' ) );
+            if ( ! is_wp_error( $term_ids ) ) {
+                foreach ( $term_ids as $tid ) {
+                    $rolmar_term_ids[ (int) $tid ] = true;
+                }
+            }
+            $product_attrs = get_post_meta( $product_id, '_product_attributes', true );
+            if ( is_array( $product_attrs ) ) {
+                foreach ( array_keys( $product_attrs ) as $attr_key ) {
+                    if ( 0 === strpos( $attr_key, 'pa_' ) ) {
+                        $rolmar_attr_slugs[ substr( $attr_key, 3 ) ] = true;
+                    }
+                }
+            }
+        }
+
         foreach ( $rolmar_products as $product_id ) {
             $product = wc_get_product( $product_id );
             if ( ! $product ) {
@@ -2527,22 +2621,17 @@ class Rolmar_Admin {
                 continue;
             }
 
-            // Delete featured image.
+            // Delete featured image (unless a non-Rolmar product also uses it).
             $thumbnail_id = get_post_thumbnail_id( $product_id );
-            if ( $thumbnail_id ) {
-                // Only delete if the image is not used by other (non-Rolmar) products.
-                $usage_count = $this->count_attachment_usage( $thumbnail_id, $rolmar_products );
-                if ( $usage_count <= 1 ) {
-                    wp_delete_attachment( $thumbnail_id, true );
-                    $stats['images_deleted']++;
-                }
+            if ( $thumbnail_id && ! $this->is_attachment_used_outside_rolmar( $thumbnail_id ) ) {
+                wp_delete_attachment( $thumbnail_id, true );
+                $stats['images_deleted']++;
             }
 
-            // Delete gallery images.
+            // Delete gallery images (same rule).
             $gallery_ids = $product->get_gallery_image_ids();
             foreach ( $gallery_ids as $gallery_id ) {
-                $usage_count = $this->count_attachment_usage( $gallery_id, $rolmar_products );
-                if ( $usage_count <= 1 ) {
+                if ( ! $this->is_attachment_used_outside_rolmar( $gallery_id ) ) {
                     wp_delete_attachment( $gallery_id, true );
                     $stats['images_deleted']++;
                 }
@@ -2552,27 +2641,72 @@ class Rolmar_Admin {
             $product->delete( true );
             $stats['products_deleted']++;
 
-            // Free memory periodically.
+            // Free memory periodically and keep the cleanup lock alive —
+            // deleting thousands of products can exceed the initial 1h TTL.
             if ( $stats['products_deleted'] % 100 === 0 ) {
-                if ( function_exists( 'wp_cache_flush' ) ) {
+                if ( function_exists( 'wp_cache_flush_runtime' ) ) {
+                    wp_cache_flush_runtime();
+                } elseif ( function_exists( 'wp_cache_flush' ) ) {
+                    // A full flush also evicts the transient lock on
+                    // persistent object-cache installs — re-arm below.
                     wp_cache_flush();
                 }
+                set_transient( 'rolmar_sync_in_progress', 'cleanup', HOUR_IN_SECONDS );
             }
         }
 
         // 2. Delete Rolmar-created categories.
-        // Categories created by ensure_category_hierarchy have slugs with parent ID suffix.
-        // We'll delete all product_cat terms that have _rolmar_created meta or are empty after product deletion.
-        $all_product_cats = get_terms( array(
+        // Candidates: terms tagged with _rolmar_created (created by 1.6+) plus
+        // terms that were attached to Rolmar products (covers pre-1.6 installs
+        // without the tag). Categories the admin mapped products into
+        // (rolmar_category_mapping) are the admin's own — never delete those
+        // unless explicitly tagged as plugin-created. Deletion still requires
+        // the term to be empty after the products are gone.
+        $tagged_cats = get_terms( array(
             'taxonomy'   => 'product_cat',
             'hide_empty' => false,
             'fields'     => 'ids',
+            'meta_key'   => '_rolmar_created',
+            'meta_value' => '1',
         ) );
+        if ( is_wp_error( $tagged_cats ) ) {
+            $tagged_cats = array();
+        }
+        $tagged_cats = array_map( 'intval', $tagged_cats );
 
-        if ( ! is_wp_error( $all_product_cats ) ) {
+        $mapped_ids = array();
+        $mapping    = get_option( 'rolmar_category_mapping', array() );
+        if ( is_array( $mapping ) ) {
+            foreach ( $mapping as $wc_ids ) {
+                foreach ( (array) $wc_ids as $wc_id ) {
+                    $mapped_ids[ (int) $wc_id ] = true;
+                }
+            }
+        }
+
+        $candidate_ids = array_fill_keys( $tagged_cats, true );
+        foreach ( array_keys( $rolmar_term_ids ) as $tid ) {
+            if ( isset( $mapped_ids[ $tid ] ) ) {
+                continue;
+            }
+            $candidate_ids[ $tid ] = true;
+            // Pre-1.6 auto-created hierarchies attach products only to the
+            // leaf term — include its ancestors so empty parents (URSUS,
+            // C-330, ...) get cleaned up too. The emptiness check below uses
+            // include_children, so an ancestor with any live product in its
+            // subtree always survives.
+            foreach ( get_ancestors( $tid, 'product_cat', 'taxonomy' ) as $ancestor_id ) {
+                if ( ! isset( $mapped_ids[ (int) $ancestor_id ] ) ) {
+                    $candidate_ids[ (int) $ancestor_id ] = true;
+                }
+            }
+        }
+        $rolmar_cats = array_keys( $candidate_ids );
+
+        if ( ! empty( $rolmar_cats ) ) {
             // Sort by depth (deepest first) so children are deleted before parents.
             $terms_with_depth = array();
-            foreach ( $all_product_cats as $term_id ) {
+            foreach ( $rolmar_cats as $term_id ) {
                 $ancestors = get_ancestors( $term_id, 'product_cat', 'taxonomy' );
                 $terms_with_depth[] = array(
                     'id'    => $term_id,
@@ -2596,10 +2730,8 @@ class Rolmar_Admin {
                     continue;
                 }
 
-                // Delete if the category is now empty (all products were Rolmar products).
-                $product_count = $term->count;
-                // Re-count to be sure (cache may be stale).
-                $fresh_count = wp_count_posts( 'product' );
+                // Delete only if the category is now empty (remaining products
+                // in it would belong to the shop owner).
                 $live_products = get_posts( array(
                     'post_type'      => 'product',
                     'posts_per_page' => 1,
@@ -2621,13 +2753,33 @@ class Rolmar_Admin {
             }
         }
 
-        // 3. Delete Rolmar-created attributes.
+        // 3. Delete Rolmar-created attributes: tracked in an option since 1.6,
+        // plus attributes that were attached to Rolmar products (covers pre-1.6
+        // installs without the marker). An attribute still used by any
+        // remaining product is skipped below regardless.
         global $wpdb;
+        $created_attribute_slugs = get_option( 'rolmar_created_attributes', array() );
+        if ( ! is_array( $created_attribute_slugs ) ) {
+            $created_attribute_slugs = array();
+        }
+        // 'marka' is always plugin-managed (created on activation/import).
+        if ( ! in_array( 'marka', $created_attribute_slugs, true ) ) {
+            $created_attribute_slugs[] = 'marka';
+        }
+        foreach ( array_keys( $rolmar_attr_slugs ) as $attr_slug ) {
+            if ( ! in_array( $attr_slug, $created_attribute_slugs, true ) ) {
+                $created_attribute_slugs[] = $attr_slug;
+            }
+        }
+
         $rolmar_attributes = $wpdb->get_results(
             "SELECT attribute_id, attribute_name FROM {$wpdb->prefix}woocommerce_attribute_taxonomies"
         );
 
         foreach ( $rolmar_attributes as $attr ) {
+            if ( ! in_array( $attr->attribute_name, $created_attribute_slugs, true ) ) {
+                continue;
+            }
             $taxonomy = 'pa_' . $attr->attribute_name;
 
             // Check if any non-deleted products still use this attribute.
@@ -2667,8 +2819,11 @@ class Rolmar_Admin {
             }
         }
 
-        // Clear attribute cache.
+        // Clear attribute caches.
         delete_transient( 'wc_attribute_taxonomies' );
+        if ( class_exists( 'WC_Cache_Helper' ) ) {
+            WC_Cache_Helper::invalidate_cache_group( 'woocommerce-attributes' );
+        }
 
         // 4. Clean up options and transients.
         delete_option( 'rolmar_last_product_sync' );
@@ -2676,6 +2831,8 @@ class Rolmar_Admin {
         delete_option( 'rolmar_last_photo_sync' );
         delete_option( 'rolmar_sync_progress' );
         delete_option( 'rolmar_category_tree_html' );
+        delete_option( 'rolmar_created_attributes' );
+        delete_option( 'rolmar_mass_removal_pending' );
         delete_transient( 'rolmar_sync_in_progress' );
 
         // Flush rewrite rules.
@@ -2697,21 +2854,50 @@ class Rolmar_Admin {
     }
 
     /**
-     * Count how many times an attachment is used across products.
+     * Check whether an attachment is used (featured image or gallery) by any
+     * post that is NOT a Rolmar-imported product.
      *
-     * @param int   $attachment_id  Attachment ID.
-     * @param array $exclude_ids    Product IDs to exclude from count.
-     * @return int
+     * Used by cleanup: shared images referenced by manually created products
+     * must survive, while images used only by Rolmar products can be deleted.
+     *
+     * @param int $attachment_id  Attachment ID.
+     * @return bool
      */
-    private function count_attachment_usage( $attachment_id, $exclude_ids = array() ) {
+    private function is_attachment_used_outside_rolmar( $attachment_id ) {
         global $wpdb;
 
-        // Check if used as featured image by non-Rolmar products.
-        $thumbnail_usage = $wpdb->get_var( $wpdb->prepare(
-            "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = '_thumbnail_id' AND meta_value = %d",
-            $attachment_id
+        $attachment_id = absint( $attachment_id );
+        if ( ! $attachment_id ) {
+            return false;
+        }
+
+        $not_rolmar = "NOT EXISTS (
+            SELECT 1 FROM {$wpdb->postmeta} r
+            WHERE r.post_id = pm.post_id AND r.meta_key = '_rolmar_product' AND r.meta_value = 'yes'
+        )";
+
+        // Featured image usage.
+        $featured = $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->postmeta} pm
+             WHERE pm.meta_key = '_thumbnail_id' AND pm.meta_value = %s AND {$not_rolmar}",
+            (string) $attachment_id
+        ) );
+        if ( (int) $featured > 0 ) {
+            return true;
+        }
+
+        // Gallery usage (_product_image_gallery holds a comma-separated ID list).
+        $gallery = $wpdb->get_var( $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->postmeta} pm
+             WHERE pm.meta_key = '_product_image_gallery'
+               AND ( pm.meta_value = %s OR pm.meta_value LIKE %s OR pm.meta_value LIKE %s OR pm.meta_value LIKE %s )
+               AND {$not_rolmar}",
+            (string) $attachment_id,
+            $wpdb->esc_like( $attachment_id ) . ',%',
+            '%,' . $wpdb->esc_like( $attachment_id ) . ',%',
+            '%,' . $wpdb->esc_like( $attachment_id )
         ) );
 
-        return (int) $thumbnail_usage;
+        return (int) $gallery > 0;
     }
 }
